@@ -23,14 +23,18 @@
 
 #[cfg(windows)]
 mod console_insn;
+#[cfg(windows)]
 mod crash;
+// Under Rosetta on Apple Silicon, or on an Intel Mac.
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+mod macos;
 pub mod prepare;
 pub mod resolve;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
 #[cfg(windows)]
 mod threads;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", target_arch = "x86_64")))]
 mod thunks;
 #[cfg(windows)]
 mod tls;
@@ -44,17 +48,17 @@ pub use crash::{
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use crash::save_on_crash;
 pub use prepare::{PrepareError, PreparedImage, prepare};
-pub use resolve::{ImportResolver, Provenance, Resolution};
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub use macos::{MappedImage, enter_thread};
+pub use resolve::{BindReport, ImportResolver, MissingImport, Provenance, Resolution};
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use stacks::{dump_stacks, dump_stacks_on_schedule};
 #[cfg(windows)]
 pub use threads::disable_thread_calls;
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", target_arch = "x86_64")))]
 pub use thunks::{UnimplementedPolicy, unimplemented_call_count};
 #[cfg(windows)]
-pub use windows::{
-    BindReport, LoadedImage, MissingImport, WithTitleDlls, load, load_title_dll, load_title_dlls,
-};
+pub use windows::{LoadedImage, WithTitleDlls, load, load_title_dll, load_title_dlls};
 
 /// `DLL_PROCESS_ATTACH`, for TLS callbacks.
 pub const DLL_PROCESS_ATTACH: u32 = 1;

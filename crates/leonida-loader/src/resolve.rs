@@ -31,3 +31,18 @@ pub enum Resolution {
 pub trait ImportResolver {
     fn resolve(&self, dll: &str, symbol: &ImportSymbol) -> Resolution;
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingImport {
+    pub dll: String,
+    pub symbol: String,
+}
+
+/// How an image's imports were bound.
+#[derive(Debug, Default, Clone)]
+pub struct BindReport {
+    pub hle: usize,
+    pub host: usize,
+    pub title: usize,
+    pub missing: Vec<MissingImport>,
+}
