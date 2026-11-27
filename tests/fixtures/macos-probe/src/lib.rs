@@ -102,3 +102,164 @@ pub extern "system" fn probe_tls_bump() -> u32 {
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
+
+// Structured exceptions. `probe_guarded` calls `probe_inner`, which faults
+// on `[rcx]` (or raises an exception when rcx is 0). The outer frame's
+// language handler catches it as `__except` would: it unwinds to
+// `probe_landing`, after the inner frame's unwind handler has run. rbx is
+// 0x1111 in the outer frame and 0x2222 in the inner one, so the landing's
+// `rbx + 2` is right only if unwinding restored it.
+
+#[repr(C)]
+pub struct ExceptionRecord {
+    code: u32,
+    flags: u32,
+    record: u64,
+    address: u64,
+    parameters: u32,
+    info: [u64; 15],
+}
+
+const EXCEPTION_UNWIND: u32 = 0x66;
+
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn RaiseException(code: u32, flags: u32, count: u32, arguments: *const usize);
+}
+
+#[link(name = "ntdll", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn RtlUnwindEx(
+        frame: u64,
+        target: u64,
+        record: *mut ExceptionRecord,
+        value: u64,
+        context: *mut u8,
+        history: *mut u8,
+    );
+}
+
+static mut LAST_CODE: u32 = 0;
+static mut UNWOUND: u32 = 0;
+
+unsafe extern "C" {
+    static probe_landing: u8;
+}
+
+unsafe extern "win64" {
+    fn probe_guarded(address: u64) -> u64;
+}
+
+extern "system" fn probe_except_handler(
+    record: *mut ExceptionRecord,
+    frame: u64,
+    context: *mut u8,
+    _dispatch: *mut u8,
+) -> u32 {
+    unsafe {
+        if (*record).flags & EXCEPTION_UNWIND == 0 {
+            LAST_CODE = (*record).code;
+            let landing = &raw const probe_landing as u64;
+            RtlUnwindEx(frame, landing, record, 0, context, core::ptr::null_mut());
+        }
+    }
+    1 // ExceptionContinueSearch
+}
+
+extern "system" fn probe_unwind_handler(
+    record: *mut ExceptionRecord,
+    _frame: u64,
+    _context: *mut u8,
+    _dispatch: *mut u8,
+) -> u32 {
+    unsafe {
+        if (*record).flags & EXCEPTION_UNWIND != 0 {
+            UNWOUND += 1;
+        }
+    }
+    1
+}
+
+extern "system" fn probe_raise_helper() {
+    unsafe { RaiseException(0xE000_1234, 0, 0, core::ptr::null()) };
+}
+
+core::arch::global_asm!(
+    ".def probe_guarded; .scl 2; .type 32; .endef",
+    ".seh_proc probe_guarded",
+    "probe_guarded:",
+    "push rbx",
+    ".seh_pushreg rbx",
+    "sub rsp, 0x20",
+    ".seh_stackalloc 0x20",
+    ".seh_endprologue",
+    ".seh_handler {except}, @except",
+    "mov rbx, 0x1111",
+    "call .Lprobe_inner",
+    "mov rax, 1",
+    "jmp .Lprobe_done",
+    ".globl probe_landing",
+    "probe_landing:",
+    "lea rax, [rbx + 2]",
+    ".Lprobe_done:",
+    "add rsp, 0x20",
+    "pop rbx",
+    "ret",
+    ".seh_endproc",
+    "",
+    ".def .Lprobe_inner; .scl 3; .type 32; .endef",
+    ".seh_proc .Lprobe_inner",
+    ".Lprobe_inner:",
+    "push rbx",
+    ".seh_pushreg rbx",
+    "sub rsp, 0x20",
+    ".seh_stackalloc 0x20",
+    ".seh_endprologue",
+    ".seh_handler {unwind}, @unwind",
+    "mov rbx, 0x2222",
+    "test rcx, rcx",
+    "jz .Lprobe_raise",
+    "mov rax, [rcx]",
+    "jmp .Lprobe_inner_done",
+    ".Lprobe_raise:",
+    "call {raise}",
+    // As MSVC does: a return address on an epilog would read as "in the
+    // epilog", and the frame's handler would be skipped.
+    "nop",
+    ".Lprobe_inner_done:",
+    "add rsp, 0x20",
+    "pop rbx",
+    "ret",
+    ".seh_endproc",
+    "",
+    // A leaf that reads [rcx]: 48 8B 01, three bytes, for a vectored handler to step over.
+    ".def probe_read; .scl 2; .type 32; .endef",
+    "probe_read:",
+    "mov rax, [rcx]",
+    "ret",
+    except = sym probe_except_handler,
+    unwind = sym probe_unwind_handler,
+    raise = sym probe_raise_helper,
+);
+
+unsafe extern "win64" {
+    fn probe_read(address: u64) -> u64;
+}
+
+/// 0x1113 when the fault (or the exception, for 0) was caught and unwound.
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_seh(address: u64) -> u64 {
+    unsafe { probe_guarded(address) }
+}
+
+/// The last exception code `probe_seh` caught, and how many inner frames
+/// were unwound.
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_seh_seen() -> u64 {
+    unsafe { ((UNWOUND as u64) << 32) | LAST_CODE as u64 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_fault_read(address: u64) -> u64 {
+    unsafe { probe_read(address) }
+}

@@ -28,8 +28,12 @@ mod crash;
 // Under Rosetta on Apple Silicon, or on an Intel Mac.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 mod macos;
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+mod seh;
 pub mod prepare;
 pub mod resolve;
+#[cfg_attr(not(all(target_os = "macos", target_arch = "x86_64")), allow(dead_code))]
+pub(crate) mod unwind;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
 #[cfg(windows)]
@@ -50,6 +54,8 @@ pub use crash::save_on_crash;
 pub use prepare::{PrepareError, PreparedImage, prepare};
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 pub use macos::{MappedImage, enter_thread};
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub use seh::export as seh_export;
 pub use resolve::{BindReport, ImportResolver, MissingImport, Provenance, Resolution};
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use stacks::{dump_stacks, dump_stacks_on_schedule};

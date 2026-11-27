@@ -113,6 +113,16 @@ impl MappedImage {
             slot.copy_from_slice(&(address as u64).to_le_bytes());
         }
         mapped.protect()?;
+        let pdata = layout::data_directory_offset(bytes, layout::dir::EXCEPTION)
+            .and_then(|at| {
+                Some((
+                    layout::read_u32(bytes, at)?,
+                    layout::read_u32(bytes, at + 4)?,
+                ))
+            })
+            .filter(|&(rva, len)| rva as u64 + len as u64 <= size as u64);
+        let (rva, len) = pdata.unwrap_or((0, 0));
+        crate::seh::register(base, size, base + rva as usize, len as usize / 12);
         tracing::info!(
             base = format_args!("{base:#x}"),
             hle = report.hle,
