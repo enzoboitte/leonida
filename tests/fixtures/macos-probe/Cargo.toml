@@ -1,0 +1,19 @@
+# A tiny stand-in for an Xbox title, used by leonida-loader's macOS test.
+# Like hle-probe it is NOT a workspace member: the test builds it on demand
+# into its own target directory, for x86_64-pc-windows-msvc with rust-lld.
+# It is no_std and imports only through raw-dylib, so it links without a
+# Windows SDK, and runs only when mapped by leonida-loader.
+[package]
+name = "macos-probe"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+panic = "abort"
+
+[workspace]
