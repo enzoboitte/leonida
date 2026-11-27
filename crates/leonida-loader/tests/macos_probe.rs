@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use leonida_loader::{
     ImportResolver, MappedImage, Provenance, Resolution, UnimplementedPolicy, enter_thread,
-    unimplemented_call_count,
+    seh_export, unimplemented_call_count,
 };
 use leonida_pe::ImportSymbol;
 
@@ -47,10 +47,15 @@ struct TestResolver;
 
 impl ImportResolver for TestResolver {
     fn resolve(&self, dll: &str, symbol: &ImportSymbol) -> Resolution {
-        match (
-            dll.to_ascii_lowercase().as_str(),
-            symbol.to_string().as_str(),
-        ) {
+        let name = symbol.to_string();
+        if let Some(address) = seh_export(dll, &name) {
+            let provenance = Provenance::Hle;
+            return Resolution::Found {
+                address,
+                provenance,
+            };
+        }
+        match (dll.to_ascii_lowercase().as_str(), name.as_str()) {
             ("xgameruntime.dll", "XGameRuntimeInitialize") => Resolution::Found {
                 address: fake_xgameruntime_initialize as *const () as usize,
                 provenance: Provenance::Hle,
@@ -81,7 +86,10 @@ fn probe() -> &'static Probe {
         assert_eq!(taken as u64, preferred);
         let (image, report) =
             MappedImage::load(&bytes, &TestResolver, UnimplementedPolicy::ReturnZero).unwrap();
-        assert_eq!(report.hle, 1);
+        assert_eq!(
+            report.hle, 3,
+            "XGameRuntimeInitialize, RaiseException, RtlUnwindEx"
+        );
         assert_ne!(image.base() as u64, preferred, "mapped elsewhere");
         let missing = report
             .missing
@@ -150,4 +158,84 @@ fn each_thread_gets_its_own_teb_and_tls_block() {
     .unwrap();
     assert_ne!(here, there);
     assert_eq!(bump(), 8);
+}
+
+#[repr(C)]
+struct ExceptionRecord {
+    code: u32,
+    flags: u32,
+    record: u64,
+    address: u64,
+    parameters: u32,
+    info: [u64; 15],
+}
+
+#[repr(C)]
+struct ExceptionPointers {
+    record: *mut ExceptionRecord,
+    context: *mut u8,
+}
+
+/// The fault `probe_fault_read` makes on purpose, and nothing else.
+const VECTORED_TARGET: u64 = 0x20;
+
+/// Steps over the faulting `mov rax, [rcx]` (3 bytes) with rax = 0x77.
+extern "win64" fn step_over_read(pointers: *mut ExceptionPointers) -> i32 {
+    // SAFETY: dispatch passes a record and a CONTEXT.
+    unsafe {
+        let record = &*(*pointers).record;
+        if record.code != 0xC000_0005 || record.info[1] != VECTORED_TARGET {
+            return 0; // EXCEPTION_CONTINUE_SEARCH
+        }
+        let ctx = (*pointers).context;
+        *(ctx.add(0xF8) as *mut u64) += 3; // Rip
+        *(ctx.add(0x78) as *mut u64) = 0x77; // Rax
+    }
+    -1 // EXCEPTION_CONTINUE_EXECUTION
+}
+
+#[test]
+fn a_vectored_handler_resumes_after_a_fault() {
+    let add = seh_export("kernel32.dll", "AddVectoredExceptionHandler").unwrap();
+    // SAFETY: our AddVectoredExceptionHandler.
+    let add: extern "win64" fn(u32, extern "win64" fn(*mut ExceptionPointers) -> i32) -> usize =
+        unsafe { std::mem::transmute(add) };
+    add(1, step_over_read);
+    let read: extern "win64" fn(u64) -> u64 = export("probe_fault_read");
+    assert_eq!(read(VECTORED_TARGET), 0x77);
+}
+
+#[test]
+fn a_frame_handler_catches_a_fault_and_raised_exceptions_and_unwinds() {
+    let guarded: extern "win64" fn(u64) -> u64 = export("probe_seh");
+    let seen: extern "win64" fn() -> u64 = export("probe_seh_seen");
+    // The landing computes rbx + 2: 0x1113 only with the outer frame's rbx.
+    assert_eq!(guarded(0x10), 0x1113, "an access violation");
+    assert_eq!(seen(), 1 << 32 | 0xC000_0005, "one inner frame unwound");
+    assert_eq!(guarded(0), 0x1113, "RaiseException");
+    assert_eq!(seen(), 2 << 32 | 0xE000_1234);
+}
+
+/// In a child process of the next test: a fault nothing handles.
+#[test]
+fn unhandled_child() {
+    if std::env::var_os("LEONIDA_UNHANDLED_CHILD").is_none() {
+        return;
+    }
+    let read: extern "win64" fn(u64) -> u64 = export("probe_fault_read");
+    read(0x30);
+}
+
+#[test]
+fn an_unhandled_fault_is_named_and_ends_the_process() {
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "unhandled_child", "--nocapture"])
+        .env("LEONIDA_UNHANDLED_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let text = String::from_utf8_lossy(&out.stderr);
+    let named = text.contains("unhandled exception 0xc0000005 at title+")
+        && text.contains("accessing 0x30");
+    assert!(named, "stderr: {text}");
 }
