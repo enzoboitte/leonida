@@ -148,6 +148,19 @@ pub fn image_base(pc: usize) -> Option<usize> {
     image_of(pc as u64).map(|(base, _)| base as usize)
 }
 
+/// With `LEONIDA_TRACE_IMPORTS=1`: the imports the title called last.
+fn print_last_imports() {
+    let last = crate::thunks::trace::last_imports();
+    for name in &last[last.len().saturating_sub(24)..] {
+        eprintln!("  called       {name}");
+    }
+}
+
+/// `module+rva` for a log line.
+pub fn locate_address(address: usize) -> String {
+    locate(address as u64)
+}
+
 /// `module+rva` for a crash report.
 fn locate(address: u64) -> String {
     match image_of(address) {
@@ -287,6 +300,7 @@ fn unhandled(record: &ExceptionRecord, why: &str) -> ! {
         text += &format!(", accessing {:#x}", record.info[1]);
     }
     eprintln!("{text}");
+    print_last_imports();
     std::process::abort();
 }
 
@@ -676,6 +690,23 @@ extern "C" fn on_signal(signal: i32, info: *mut libc::siginfo_t, uc: *mut libc::
     if image_of(ss.__rip).is_none() {
         // Not ours: put the previous handler back, and the fault happens
         // again under it when this returns.
+        if crate::thunks::trace::on() {
+            // SAFETY: plain data filled in by the call.
+            let mut where_: libc::Dl_info = unsafe { std::mem::zeroed() };
+            // SAFETY: an address and an out structure.
+            unsafe { libc::dladdr(ss.__rip as *const _, &mut where_) };
+            let name = if where_.dli_sname.is_null() {
+                String::new()
+            } else {
+                // SAFETY: a symbol name of the host's, NUL-terminated.
+                unsafe { std::ffi::CStr::from_ptr(where_.dli_sname) }.to_string_lossy().into_owned()
+            };
+            eprintln!(
+                "Leonida Legacy: signal {signal} outside the title at {:#x} ({name}), accessing {:#x}",
+                ss.__rip, info.si_addr as u64
+            );
+            print_last_imports();
+        }
         if let Ok(previous) = PREVIOUS.try_lock()
             && let Some((_, old)) = previous.iter().find(|(s, _)| *s == signal)
         {
@@ -698,6 +729,22 @@ extern "C" fn on_signal(signal: i32, info: *mut libc::siginfo_t, uc: *mut libc::
     for n in 0..16 {
         // SAFETY: the 16 XMM fields of the float state follow each other.
         ctx.set_xmm(n, unsafe { xmm.add(n).read_unaligned() });
+    }
+
+    // `int 0x29` is `__fastfail(code)`: on Windows the process ends at once,
+    // no handler is asked, and the reason is in rcx. The host raises a
+    // segment fault for it.
+    // SAFETY: the faulting instruction lies in a mapped image (checked above).
+    if signal == libc::SIGSEGV && unsafe { (ss.__rip as *const [u8; 2]).read_unaligned() } == [0xCD, 0x29] {
+        let text = format!(
+            "Leonida Legacy: the title failed fast (__fastfail, reason {}) at {}",
+            ss.__rcx,
+            locate(ss.__rip)
+        );
+        eprintln!("{text}");
+        // SAFETY: async-signal-safe exit; nothing more of the title runs.
+        print_last_imports();
+        unsafe { libc::_exit(0xC000_0409_u32 as i32) };
     }
 
     let mut record = ExceptionRecord::new(0, ctx.rip);

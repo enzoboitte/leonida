@@ -163,3 +163,31 @@ C runtime functions (`api-ms-win-crt-*`, from `ucrtbase.dll`, which the game doe
 With `--execute` (`--unimplemented trap`, `LEONIDA_NO_WINDOW=1`) the game's code ran under
 Rosetta 2 through the TLS callbacks and DLL entry points until its first C runtime call,
 `_initialize_onexit_table`, which trapped as it should with no `ucrtbase.dll`.
+
+## Our own C runtime, DirectStorage, and the game running further
+
+With no `ucrtbase.dll` supplied, `modules::win32::crt` is the C runtime on macOS (`ucrtbase.dll`
+and `api-ms-win-crt-*`): start-up (exit and initialiser tables, `argv`, the environment, errno,
+`_beginthreadex`), the heap, `stdio` (`FILE`s over our file handles, descriptors, and every
+`__stdio_common_*` entry point, with Microsoft's truncation rules), a `printf`/`scanf` engine for
+Windows x64 `va_list`s (`long` of 32 bits, `%I64d`, `%ls`, two-digit exponents), and the rest the
+game calls: math, narrow and UTF-16 strings, the C locale's character classes, `qsort` and
+`bsearch` with the title's comparators, Microsoft's `rand`, time, and the runtime's file system
+calls. When a real `ucrtbase.dll` is mapped, the runner gives it every function it has, so two
+runtimes never share a heap or a table.
+
+`modules::dstorage` builds on macOS now (Unix file reads, physical page writes through views of
+the shared-memory pages, `LEONIDA_*` GPU notices left out), and its 16 tests run there.
+`VirtualFree` and `VirtualAlloc` handle placeholders (`MEM_PRESERVE_PLACEHOLDER` splits,
+`MEM_COALESCE_PLACEHOLDERS` merges, `MEM_REPLACE_PLACEHOLDER` fills one). `GetModuleHandle` of a
+DLL Windows would have (`kernel32.dll`...) gives our pseudo module off Windows, where there is no
+host one: the C runtime's start-up failed fast without it.
+
+Diagnostics: `LEONIDA_TRACE_IMPORTS=1` (macOS, off) routes every bound import through a relay that
+records its name, and a stop prints the last ones called; `int 0x29` (`__fastfail`) is reported
+with its reason; a fault in our own code names the function (`dladdr`).
+
+On the user's Xbox Series copy the game now gets past the C runtime's start-up, configures its
+graphics memory, initialises the GDK runtime, creates GameInput, opens its archives through
+DirectStorage (twelve `.rpf` files), maps physical pages, and stops at one of its own checks
+(a breakpoint) further on. 210 tests pass on x86-64 macOS.

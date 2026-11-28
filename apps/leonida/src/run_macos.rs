@@ -24,11 +24,26 @@ struct WithDlls<'a> {
 
 impl ImportResolver for WithDlls<'_> {
     fn resolve(&self, dll: &str, symbol: &ImportSymbol) -> Resolution {
+        // A real C runtime, when one was supplied, gives every function it has:
+        // two runtimes must not share a heap or an exit table.
+        let target = api_set(dll);
+        if target.eq_ignore_ascii_case("ucrtbase.dll") {
+            let found = self.title(target, symbol);
+            if found != Resolution::Missing {
+                return found;
+            }
+        }
         let found = self.inner.resolve(dll, symbol);
         if found != Resolution::Missing {
             return found;
         }
-        let dll = api_set(dll);
+        self.title(target, symbol)
+    }
+}
+
+impl WithDlls<'_> {
+    /// `symbol` from the title DLL `dll`, if it is mapped and has it.
+    fn title(&self, dll: &str, symbol: &ImportSymbol) -> Resolution {
         let Some((_, image)) = self.dlls.iter().find(|(n, _)| n.eq_ignore_ascii_case(dll)) else {
             return Resolution::Missing;
         };

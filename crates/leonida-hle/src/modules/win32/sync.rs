@@ -85,6 +85,10 @@ impl Table {
         self.objects.get_mut(&handle)
     }
 
+    pub(super) fn objects_remove(&mut self, handle: usize) -> Option<Object> {
+        self.objects.remove(&handle)
+    }
+
     /// Whether `handle` is signalled for this thread; takes it if `take`.
     fn ready(&mut self, handle: usize, me: u32, take: bool) -> Option<bool> {
         if handle == CURRENT_PROCESS {

@@ -512,12 +512,9 @@ pub extern "win64" fn MFGetSystemTime() -> i64 {
     super::system::GetTickCount64() as i64 * 10_000
 }
 
+/// Writes nothing: these functions take their out pointer in different places.
 #[allow(non_snake_case)]
-pub extern "win64" fn not_ported(out: *mut usize) -> i32 {
-    if !out.is_null() {
-        // SAFETY: the out pointer these creators take first or last.
-        unsafe { *out = 0 };
-    }
+pub extern "win64" fn not_ported() -> i32 {
     E_NOTIMPL
 }
 
@@ -542,10 +539,9 @@ pub fn modules() -> Vec<HleModule> {
             ],
         },
         HleModule {
-            name: "storage and audio processor",
-            dlls: &["xcrdapi.dll", "xapu.dll"],
+            name: "audio processor",
+            dlls: &["xapu.dll"],
             exports: [
-                "DStorageGetFactory",
                 "XApuConnect",
                 "XApuDisconnect",
                 "XApuEnqueueCommand",

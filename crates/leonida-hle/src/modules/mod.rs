@@ -17,7 +17,7 @@ pub mod audio;
 pub mod d3d12x;
 pub mod display;
 pub mod dsp;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub mod dstorage;
 #[cfg(windows)]
 pub mod files;
@@ -49,6 +49,8 @@ pub mod xuser;
 pub mod win32;
 #[cfg(target_os = "macos")]
 pub use win32::files;
+#[cfg(target_os = "macos")]
+pub use win32::xmem;
 
 use crate::HleModule;
 
@@ -66,7 +68,7 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(apu::module());
     #[cfg(windows)]
     all.push(media::module());
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     all.push(dstorage::module());
     #[cfg(windows)]
     all.push(files::module());
@@ -86,6 +88,8 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(win32::net::module());
     #[cfg(target_os = "macos")]
     all.push(win32::oleaut32());
+    #[cfg(target_os = "macos")]
+    all.push(win32::crt::module());
     #[cfg(target_os = "macos")]
     all.push(win32::xaudio2());
     #[cfg(target_os = "macos")]

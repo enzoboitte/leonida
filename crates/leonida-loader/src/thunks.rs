@@ -154,6 +154,8 @@ pub(crate) fn resolve_imports(
     let mut report = BindReport::default();
     let mut slots: Vec<(u32, usize)> = Vec::with_capacity(info.import_count());
     let mut unresolved: Vec<(u32, &str, &ImportSymbol)> = Vec::new();
+    #[cfg(target_os = "macos")]
+    let mut traced: Vec<(usize, String)> = Vec::new();
     for module in info.imports.iter().chain(&info.delay_imports) {
         for entry in &module.entries {
             match resolver.resolve(&module.dll, &entry.symbol) {
@@ -165,6 +167,10 @@ pub(crate) fn resolve_imports(
                         Provenance::Hle => report.hle += 1,
                         Provenance::Host => report.host += 1,
                         Provenance::Title => report.title += 1,
+                    }
+                    #[cfg(target_os = "macos")]
+                    if trace::on() {
+                        traced.push((slots.len(), format!("{}!{}", module.dll, entry.symbol)));
                     }
                     slots.push((entry.iat_slot_rva, address));
                 }
@@ -191,6 +197,14 @@ pub(crate) fn resolve_imports(
             });
         }
         block.seal()?;
+    }
+    #[cfg(target_os = "macos")]
+    if !traced.is_empty() {
+        let targets: Vec<(String, usize)> =
+            traced.iter().map(|(i, name)| (name.clone(), slots[*i].1)).collect();
+        for ((i, _), relay) in traced.iter().zip(trace::relays(&targets)?) {
+            slots[*i].1 = relay;
+        }
     }
     Ok((slots, report))
 }
@@ -286,5 +300,68 @@ mod tests {
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         let named = text.contains("Leonida Legacy: unimplemented import probe.dll!Missing called");
         assert!(named, "crash log: {text:?}");
+    }
+}
+
+/// `LEONIDA_TRACE_IMPORTS=1` (macOS, off): every bound import goes through
+/// a relay that writes its name into a ring of the last 256 calls, so that
+/// a stop can say which imports the title called last ([`last_imports`]).
+/// The relay changes only rax, r10 and r11, which a call may change anyway.
+#[cfg(target_os = "macos")]
+pub(crate) mod trace {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// The count of calls, then 256 slots of leaked `&'static str` addresses.
+    static RING: [AtomicU64; 257] = [const { AtomicU64::new(0) }; 257];
+    const RELAY: usize = 64;
+
+    pub(crate) fn on() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LEONIDA_TRACE_IMPORTS").is_some_and(|v| v == "1"))
+    }
+
+    /// Relays for `targets` (name, address), in a block of their own; the
+    /// relay addresses, in the same order.
+    pub(crate) fn relays(targets: &[(String, usize)]) -> anyhow::Result<Vec<usize>> {
+        let len = (targets.len().max(1) * RELAY).next_multiple_of(4096);
+        let base = super::memory::alloc_rw(len);
+        anyhow::ensure!(!base.is_null(), "allocating import relays failed");
+        let ring = RING.as_ptr() as u64;
+        let mut out = Vec::with_capacity(targets.len());
+        for (i, (name, target)) in targets.iter().enumerate() {
+            let site: &'static &'static str = Box::leak(Box::new(&*name.clone().leak()));
+            let mut c = Vec::with_capacity(RELAY);
+            c.extend([0x49, 0xBA]); // mov r10, ring
+            c.extend(ring.to_le_bytes());
+            c.extend([0x41, 0xBB, 1, 0, 0, 0]); // mov r11d, 1
+            c.extend([0xF0, 0x4D, 0x0F, 0xC1, 0x1A]); // lock xadd [r10], r11
+            c.extend([0x41, 0x81, 0xE3, 0xFF, 0, 0, 0]); // and r11d, 0xff
+            c.extend([0x48, 0xB8]); // mov rax, site
+            c.extend((site as *const _ as u64).to_le_bytes());
+            c.extend([0x4B, 0x89, 0x44, 0xDA, 0x08]); // mov [r10 + r11*8 + 8], rax
+            c.extend([0x48, 0xB8]); // mov rax, target
+            c.extend((*target as u64).to_le_bytes());
+            c.extend([0xFF, 0xE0]); // jmp rax
+            c.resize(RELAY, 0xCC);
+            // SAFETY: inside the fresh block, still writable.
+            unsafe { std::ptr::copy_nonoverlapping(c.as_ptr(), base.add(i * RELAY), RELAY) };
+            out.push(base as usize + i * RELAY);
+        }
+        // SAFETY: the block made above.
+        anyhow::ensure!(unsafe { super::memory::seal_rx(base, len) }, "protecting import relays failed");
+        Ok(out)
+    }
+
+    /// The imports called last, oldest first (empty when tracing is off).
+    pub fn last_imports() -> Vec<&'static str> {
+        let count = RING[0].load(Ordering::Relaxed) as usize;
+        let first = count.saturating_sub(256);
+        (first..count)
+            .filter_map(|i| {
+                let site = RING[1 + i % 256].load(Ordering::Relaxed);
+                // SAFETY: a leaked `&'static str` a relay wrote.
+                (site != 0).then(|| unsafe { *(site as *const &'static str) })
+            })
+            .collect()
     }
 }

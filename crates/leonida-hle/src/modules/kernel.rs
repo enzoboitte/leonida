@@ -319,8 +319,9 @@ fn find_module(path: &str, load: bool) -> Option<*mut c_void> {
     if let Some(base) = runtime::image_named(&file) {
         return Some(base as *mut c_void);
     }
-    // DLLs the host has too are real host modules, whatever `--strict` says.
-    let host_dll = HostPolicy::default().allows(&file);
+    // DLLs the host has too are real host modules, whatever `--strict` says;
+    // a host without Windows has none, and ours stand for them.
+    let host_dll = cfg!(windows) && HostPolicy::default().allows(&file);
     if !host_dll && let Some(m) = registry().iter().find(|m| m.serves(&file)) {
         if load {
             tracing::info!(dll = file, "loaded as a pseudo module");

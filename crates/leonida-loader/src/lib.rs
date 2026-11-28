@@ -55,7 +55,7 @@ pub use prepare::{PrepareError, PreparedImage, prepare};
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 pub use macos::{MappedImage, disable_thread_calls, enter_thread, spawn_thread};
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub use seh::{export as seh_export, image_base};
+pub use seh::{export as seh_export, image_base, locate_address};
 pub use resolve::{BindReport, ImportResolver, MissingImport, Provenance, Resolution};
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use stacks::{dump_stacks, dump_stacks_on_schedule};
@@ -63,6 +63,8 @@ pub use stacks::{dump_stacks, dump_stacks_on_schedule};
 pub use threads::disable_thread_calls;
 #[cfg(any(windows, all(target_os = "macos", target_arch = "x86_64")))]
 pub use thunks::{UnimplementedPolicy, unimplemented_call_count};
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub use thunks::trace::last_imports;
 #[cfg(windows)]
 pub use windows::{LoadedImage, WithTitleDlls, load, load_title_dll, load_title_dlls};
 
