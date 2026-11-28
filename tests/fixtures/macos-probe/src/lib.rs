@@ -3,6 +3,7 @@
 #![no_std]
 
 use core::hint::black_box;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[link(name = "xgameruntime", kind = "raw-dylib")]
 unsafe extern "system" {
@@ -62,14 +63,48 @@ pub struct TlsDirectory {
     start: *const u8,
     end: *const u8,
     index: *const u32,
-    callbacks: *const usize,
+    callbacks: *const Option<Notice>,
     zero_fill: u32,
     characteristics: u32,
 }
 // SAFETY: read-only after linking; only the loader reads it.
 unsafe impl Sync for TlsDirectory {}
 
-static NO_CALLBACKS: [usize; 1] = [0];
+type Notice = extern "system" fn(*mut u8, u32, *mut u8);
+
+/// The image's TLS callbacks, ended by a null entry.
+static TLS_CALLBACKS: [Option<Notice>; 2] = [Some(probe_tls_callback), None];
+
+/// Notices counted by source (0: the TLS callback, 1: `DllMain`) and reason.
+static NOTICES: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
+
+extern "system" fn probe_tls_callback(_module: *mut u8, reason: u32, _: *mut u8) {
+    if let Some(n) = NOTICES.get(reason as usize) {
+        n.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The DLL's entry point (`/ENTRY`, see build.rs).
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_dll_main(_module: *mut u8, reason: u32, _: *mut u8) -> i32 {
+    if let Some(n) = NOTICES.get(4 + reason as usize) {
+        n.fetch_add(1, Ordering::Relaxed);
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_notices(source: u32, reason: u32) -> u32 {
+    // No indexing that can panic: that would link core's formatting, which needs a CRT.
+    let n = NOTICES.get((source * 4 + reason) as usize);
+    n.map_or(0, |n| n.load(Ordering::Relaxed))
+}
+
+/// A thread procedure: its parameter plus this thread's first TLS bump.
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_thread(param: u64) -> u32 {
+    param as u32 + probe_tls_bump()
+}
 
 #[unsafe(no_mangle)]
 #[used]
@@ -77,7 +112,7 @@ pub static _tls_used: TlsDirectory = TlsDirectory {
     start: &raw const TLS_START,
     end: &raw const TLS_END,
     index: &raw const _tls_index,
-    callbacks: NO_CALLBACKS.as_ptr(),
+    callbacks: TLS_CALLBACKS.as_ptr(),
     zero_fill: 0,
     characteristics: 0,
 };

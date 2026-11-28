@@ -53,7 +53,7 @@ pub use crash::{
 pub use crash::save_on_crash;
 pub use prepare::{PrepareError, PreparedImage, prepare};
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-pub use macos::{MappedImage, enter_thread};
+pub use macos::{MappedImage, disable_thread_calls, enter_thread, spawn_thread};
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 pub use seh::export as seh_export;
 pub use resolve::{BindReport, ImportResolver, MissingImport, Provenance, Resolution};

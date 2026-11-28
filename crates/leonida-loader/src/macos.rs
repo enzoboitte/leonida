@@ -9,6 +9,8 @@
 //! `docs/notes/2026-11-27-macos-loader.md`.
 
 use std::cell::Cell;
+use std::ffi::c_void;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail, ensure};
 use leonida_pe::{ImageInfo, layout};
@@ -32,15 +34,21 @@ const TEB_SELF: usize = 0x30;
 const TEB_TLS_POINTER: usize = 0x58;
 /// More than a Windows 10 TEB (0x1838 bytes), so stray reads stay inside.
 const TEB_SIZE: usize = 0x2000;
-/// Slots of a thread's TLS array; the image's static TLS is slot 0.
+/// Slots of a thread's TLS array, one per image with static TLS: the exe's
+/// is slot 0, as Windows gives it, DLLs' the next free ones.
 const TLS_SLOTS: usize = 64;
+const DLL_PROCESS_ATTACH: u32 = 1;
+const DLL_THREAD_ATTACH: u32 = 2;
+const DLL_THREAD_DETACH: u32 = 3;
 const PAGE: usize = 0x1000;
 
 /// A title image mapped into this process, relocated and bound.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MappedImage {
     base: usize,
     info: ImageInfo,
+    /// Its slot in every thread's TLS array, if it has static TLS.
+    tls_index: Option<usize>,
 }
 
 impl MappedImage {
@@ -94,14 +102,22 @@ impl MappedImage {
             );
             relocate(bytes, image, delta)?;
         }
-        let mapped = MappedImage { base, info };
-        if let Some(at) = mapped.tls_field(TLS_INDEX) {
-            // An exe's static TLS is slot 0 of the thread's array; `enter_thread` puts it there.
-            let at = mapped.rva_of(at).context("TLS index outside the image")?;
+        let mut mapped = MappedImage {
+            base,
+            info,
+            tls_index: None,
+        };
+        let index_at = match mapped.tls_field(TLS_INDEX) {
+            Some(va) => Some(mapped.rva_of(va).context("TLS index outside the image")?),
+            None => None,
+        };
+        if let Some(at) = index_at {
+            let index = reserve_tls_index(mapped.info.is_dll())?;
             image
                 .get_mut(at..at + 4)
                 .context("TLS index outside the image")?
-                .fill(0);
+                .copy_from_slice(&(index as u32).to_le_bytes());
+            mapped.tls_index = Some(index);
         }
 
         let (slots, report) = resolve_imports(&mapped.info, resolver, policy)?;
@@ -123,6 +139,7 @@ impl MappedImage {
             .filter(|&(rva, len)| rva as u64 + len as u64 <= size as u64);
         let (rva, len) = pdata.unwrap_or((0, 0));
         crate::seh::register(base, size, base + rva as usize, len as usize / 12);
+        registered(&mapped);
         tracing::info!(
             base = format_args!("{base:#x}"),
             hle = report.hle,
@@ -154,6 +171,86 @@ impl MappedImage {
     /// The image's entry point, if it has one.
     pub fn entry_point(&self) -> Option<usize> {
         (self.info.entry_rva != 0).then(|| self.base + self.info.entry_rva as usize)
+    }
+
+    /// Initialises a DLL as the Windows loader would: its TLS callbacks,
+    /// then `DllMain(DLL_PROCESS_ATTACH)`. From then on it hears of every
+    /// thread [`spawn_thread`] starts and ends.
+    ///
+    /// # Safety
+    /// Runs title code on the calling thread, which must have called
+    /// [`enter_thread`]. The DLLs this one depends on must be attached.
+    pub unsafe fn attach(&self) -> Result<()> {
+        // SAFETY: forwarded from the caller.
+        if unsafe { self.notify(DLL_PROCESS_ATTACH, true) } == Some(0) {
+            bail!("DllMain returned FALSE");
+        }
+        attached(self.base);
+        Ok(())
+    }
+
+    /// Starts the title: on a new thread with the stack size the image asks
+    /// for, attaches `dlls` in order, runs the image's TLS callbacks
+    /// (`DLL_PROCESS_ATTACH`), then its entry point. The thread's result is
+    /// what the entry point returned.
+    ///
+    /// # Safety
+    /// Runs title code. The imports of the image and of `dlls` are bound.
+    pub unsafe fn run_main(
+        &self,
+        dlls: Vec<MappedImage>,
+    ) -> Result<std::thread::JoinHandle<Result<u32>>> {
+        let entry = self.entry_point().context("image has no entry point")?;
+        let stack = usize::try_from(self.info.stack_reserve)
+            .unwrap_or(usize::MAX)
+            .max(1 << 20);
+        let main = self.clone();
+        std::thread::Builder::new()
+            .name("title-main".into())
+            .stack_size(stack)
+            .spawn(move || {
+                enter_thread();
+                for dll in &dlls {
+                    // SAFETY: forwarded from the caller of `run_main`.
+                    unsafe { dll.attach() }
+                        .with_context(|| format!("attaching {:#x}", dll.base))?;
+                }
+                // SAFETY: forwarded from the caller of `run_main`.
+                unsafe { main.notify(DLL_PROCESS_ATTACH, false) };
+                attached(main.base);
+                type Entry = unsafe extern "win64" fn(*mut c_void) -> u32;
+                // SAFETY: the entry RVA came from the image header.
+                let entry: Entry = unsafe { std::mem::transmute(entry) };
+                // SAFETY: forwarded from the caller of `run_main`.
+                Ok(unsafe { entry(std::ptr::null_mut()) })
+            })
+            .context("spawning the title's main thread")
+    }
+
+    /// Runs the image's TLS callbacks with `reason`, then, if `dll_main` and
+    /// the image is a DLL with an entry point, its `DllMain`, whose result is
+    /// returned.
+    ///
+    /// # Safety
+    /// Runs title code on a thread that called [`enter_thread`].
+    unsafe fn notify(&self, reason: u32, dll_main: bool) -> Option<i32> {
+        type Notice = unsafe extern "win64" fn(*mut c_void, u32, *mut c_void) -> i32;
+        let module = self.base as *mut c_void;
+        for &rva in self.info.tls.iter().flat_map(|t| &t.callback_rvas) {
+            // SAFETY: the RVA came from the image's own TLS directory. A TLS
+            // callback returns nothing; reading rax is harmless.
+            let callback: Notice = unsafe { std::mem::transmute(self.base + rva as usize) };
+            // SAFETY: forwarded from the caller.
+            unsafe { callback(module, reason, std::ptr::null_mut()) };
+        }
+        if !dll_main || !self.info.is_dll() {
+            return None;
+        }
+        let entry = self.entry_point()?;
+        // SAFETY: the entry RVA came from the image header.
+        let main: Notice = unsafe { std::mem::transmute(entry) };
+        // SAFETY: forwarded from the caller.
+        Some(unsafe { main(module, reason, std::ptr::null_mut()) })
     }
 
     fn rva_of(&self, va: u64) -> Option<usize> {
@@ -275,13 +372,141 @@ fn relocate(bytes: &[u8], image: &mut [u8], delta: u64) -> Result<()> {
     Ok(())
 }
 
+/// An image we mapped, in load order, and what the threads it hears of
+/// need.
+struct Registered {
+    image: MappedImage,
+    /// Its `DLL_PROCESS_ATTACH` is done; only then does it hear of threads.
+    attached: bool,
+    /// `DisableThreadLibraryCalls`: no more `DllMain` thread notices.
+    quiet: bool,
+}
+
+/// Every image we mapped, then every thread's TLS array (as addresses), so
+/// that an image mapped later gets its block in threads already running, as
+/// on Windows. Taken in this order.
+static IMAGES: Mutex<Vec<Registered>> = Mutex::new(Vec::new());
+static ARRAYS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// TLS slots handed out, one bit each.
+static TLS_TAKEN: Mutex<u64> = Mutex::new(0);
+
+fn images() -> std::sync::MutexGuard<'static, Vec<Registered>> {
+    IMAGES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn arrays() -> std::sync::MutexGuard<'static, Vec<usize>> {
+    ARRAYS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Slot 0 for an exe (its code reads its block at `gs:[0x58]` then `[0]`
+/// without reading `_tls_index`), the lowest free one from 1 for a DLL.
+fn reserve_tls_index(dll: bool) -> Result<usize> {
+    let mut taken = TLS_TAKEN.lock().unwrap_or_else(|e| e.into_inner());
+    let free = if dll { 1..TLS_SLOTS } else { 0..1 };
+    let Some(index) = free.into_iter().find(|i| *taken & (1 << i) == 0) else {
+        bail!("no free TLS slot for this image (an exe's is slot 0)");
+    };
+    *taken |= 1 << index;
+    Ok(index)
+}
+
+/// Records a mapped image, and gives threads already running its TLS block.
+fn registered(image: &MappedImage) {
+    let mut images = images();
+    if let (Some(index), Some(block)) = (image.tls_index, image.tls_block()) {
+        for &array in arrays().iter() {
+            let block = Box::leak(block.clone().into_boxed_slice()).as_mut_ptr() as usize;
+            // SAFETY: each array is a leaked `[usize; TLS_SLOTS]`; `index` is
+            // below `TLS_SLOTS` and reserved for this image alone.
+            unsafe { (array as *mut usize).add(index).write(block) };
+        }
+    }
+    images.push(Registered {
+        image: image.clone(),
+        attached: false,
+        quiet: false,
+    });
+}
+
+fn attached(base: usize) {
+    if let Some(r) = images().iter_mut().find(|r| r.image.base == base) {
+        r.attached = true;
+    }
+}
+
+/// `DisableThreadLibraryCalls`: the image's `DllMain` hears of no more
+/// threads (its TLS callbacks still do). Whether `base` is one of ours.
+pub fn disable_thread_calls(base: usize) -> bool {
+    match images().iter_mut().find(|r| r.image.base == base) {
+        Some(r) => {
+            r.quiet = true;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Tells every attached image of a thread start or end: in attach order for
+/// a start, the reverse for an end, as the Windows loader does.
+///
+/// # Safety
+/// Runs title code on a thread that called [`enter_thread`].
+unsafe fn thread_notice(reason: u32) {
+    // Copied, so the title can map images while it hears of the thread.
+    let mut told: Vec<(MappedImage, bool)> = images()
+        .iter()
+        .filter(|r| r.attached)
+        .map(|r| (r.image.clone(), !r.quiet))
+        .collect();
+    if reason == DLL_THREAD_DETACH {
+        told.reverse();
+    }
+    for (image, dll_main) in told {
+        // SAFETY: forwarded from the caller.
+        unsafe { image.notify(reason, dll_main) };
+    }
+}
+
+/// Starts a title thread: `start(param)` with the Windows x64 convention, on
+/// a thread of `stack` bytes (at least 64 KiB) that has a TEB, and that every
+/// attached image hears of when it starts and ends. Its result is
+/// `start`'s.
+///
+/// # Safety
+/// `start` is title code with the signature of a thread procedure.
+pub unsafe fn spawn_thread(
+    start: usize,
+    param: usize,
+    stack: usize,
+) -> std::io::Result<std::thread::JoinHandle<u32>> {
+    type Start = unsafe extern "win64" fn(usize) -> u32;
+    // SAFETY: the caller's guarantee.
+    let start: Start = unsafe { std::mem::transmute(start) };
+    std::thread::Builder::new()
+        .name("title".into())
+        .stack_size(stack.max(64 << 10))
+        .spawn(move || {
+            enter_thread();
+            // SAFETY: this thread has a TEB; the caller vouches for `start`.
+            unsafe {
+                thread_notice(DLL_THREAD_ATTACH);
+                let result = start(param);
+                thread_notice(DLL_THREAD_DETACH);
+                result
+            }
+        })
+}
+
 thread_local! {
     static TEB: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Makes the calling thread ready to run `image`'s code: a TEB with its
-/// static TLS block, reachable through `gs` as Win64 code expects. Returns
-/// the TEB's address; calling it again on the same thread returns the same.
+/// Makes the calling thread ready to run title code: a TEB, and a TLS array
+/// with every mapped image's static TLS block, reachable through `gs` as
+/// Win64 code expects. Returns the TEB's address; calling it again on the
+/// same thread returns the same. [`spawn_thread`] and
+/// [`MappedImage::run_main`] call it; a thread of ours that calls into the
+/// title (a callback) must call it first.
 ///
 /// macOS keeps a thread's pthread TSD array at `gs`, so `gs:0x30` and
 /// `gs:0x58` are TSD slots 6 and 11. The TEB's `Self` and TLS pointers are
@@ -291,16 +516,23 @@ thread_local! {
 /// the other TEB fields (stack bounds at `gs:0x08`/`0x10`, ids at `0x40`/`0x48`,
 /// the PEB at `0x60`) overlap TSD slots macOS uses, so a `gs` read of them
 /// gets macOS's values. Rewrite such reads in the image when a title needs them.
-/// shortcut: the TEB and TLS block are leaked when the thread ends; free them
+/// shortcut: the TEB and TLS blocks are leaked when the thread ends; free them
 /// on thread exit once titles start many short threads.
-pub fn enter_thread(image: &MappedImage) -> usize {
+pub fn enter_thread() -> usize {
     let teb = TEB.get();
     if teb != 0 {
         return teb;
     }
     let tls: &'static mut [usize] = Box::leak(vec![0usize; TLS_SLOTS].into_boxed_slice());
-    if let Some(block) = image.tls_block() {
-        tls[0] = Box::leak(block.into_boxed_slice()).as_mut_ptr() as usize;
+    {
+        let images = images();
+        for r in images.iter() {
+            if let (Some(index), Some(block)) = (r.image.tls_index, r.image.tls_block()) {
+                tls[index] = Box::leak(block.into_boxed_slice()).as_mut_ptr() as usize;
+            }
+        }
+        // Under the images' lock, so an image mapped now reaches this array.
+        arrays().push(tls.as_ptr() as usize);
     }
     let teb: &'static mut [u64] = Box::leak(vec![0u64; TEB_SIZE / 8].into_boxed_slice());
     let address = teb.as_ptr() as usize;
