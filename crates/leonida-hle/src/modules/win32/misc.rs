@@ -492,6 +492,305 @@ pub extern "win64" fn RegisterAppStateChangeNotification(
 #[allow(non_snake_case)]
 pub extern "win64" fn UnregisterAppStateChangeNotification(_: usize) {}
 
+// Certificates (crypt32): a console with an empty certificate store; no
+// certificate is ever found, so nothing can be verified or presented.
+
+const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
+/// The one store handle; it holds nothing.
+const STORE: usize = 0x5703_0000;
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertOpenStore(_: usize, _: u32, _: usize, _: u32, _: *const c_void) -> usize {
+    STORE
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertOpenSystemStoreW(_: usize, _: *const u16) -> usize {
+    STORE
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertCloseStore(_: usize, _: u32) -> i32 {
+    1
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertFindCertificateInStore(
+    _: usize,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: *const c_void,
+    _: usize,
+) -> usize {
+    set_last_error(CRYPT_E_NOT_FOUND);
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertFindChainInStore(
+    _: usize,
+    _: u32,
+    _: u32,
+    _: u32,
+    _: *const c_void,
+    _: usize,
+) -> usize {
+    set_last_error(CRYPT_E_NOT_FOUND);
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertFreeCertificateContext(_: usize) -> i32 {
+    1
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CertFreeCertificateChain(_: usize) {}
+
+/// Base64 (with or without a PEM header line) to bytes; other encodings are
+/// refused. As Windows: with no output buffer, the size it needs.
+#[allow(non_snake_case)]
+pub extern "win64" fn CryptStringToBinaryW(
+    text: *const u16,
+    length: u32,
+    flags: u32,
+    out: *mut u8,
+    size: *mut u32,
+    _skip: *mut u32,
+    used_flags: *mut u32,
+) -> i32 {
+    const BASE64HEADER: u32 = 0;
+    const BASE64: u32 = 1;
+    if flags != BASE64HEADER && flags != BASE64 || size.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    // SAFETY: the title's text, `length` units or NUL-terminated.
+    let text = String::from_utf16_lossy(unsafe {
+        units(text, if length == 0 { -1 } else { length as i32 })
+    });
+    let body: String = text.lines().filter(|l| !l.starts_with("-----")).collect();
+    let Some(bytes) = base64(&body) else {
+        set_last_error(0x8009_0005); // NTE_BAD_DATA
+        return 0;
+    };
+    // SAFETY: the title's in-out size, and its buffer of that size or null.
+    unsafe {
+        if !used_flags.is_null() {
+            *used_flags = flags;
+        }
+        if !out.is_null() {
+            if (*size as usize) < bytes.len() {
+                *size = bytes.len() as u32;
+                set_last_error(ERROR_INSUFFICIENT_BUFFER);
+                return 0;
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+        }
+        *size = bytes.len() as u32;
+    }
+    1
+}
+
+fn base64(text: &str) -> Option<Vec<u8>> {
+    let mut bits = 0u32;
+    let mut count = 0;
+    let mut out = Vec::new();
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        bits = bits << 6 | u32::from(v);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+        }
+    }
+    Some(out)
+}
+
+// Classic event tracing: no session ever enables a provider.
+
+#[allow(non_snake_case)]
+pub extern "win64" fn RegisterTraceGuidsW(
+    _: usize,
+    _: usize,
+    _: *const c_void,
+    _: u32,
+    _: *const c_void,
+    _: *const u16,
+    _: *const u16,
+    handle: *mut u64,
+) -> u32 {
+    if !handle.is_null() {
+        // SAFETY: the title's out pointer.
+        unsafe { *handle = 1 };
+    }
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn UnregisterTraceGuids(_: u64) -> u32 {
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn GetTraceLoggerHandle(_: *const c_void) -> u64 {
+    set_last_error(ERROR_INVALID_PARAMETER);
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn GetTraceEnableFlags(_: u64) -> u32 {
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn GetTraceEnableLevel(_: u64) -> u8 {
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn TraceMessage(_: u64, _: u32, _: *const c_void, _: u16) -> u32 {
+    0
+}
+
+/// shortcut: images' resources are not read; no resource is found.
+#[allow(non_snake_case)]
+pub extern "win64" fn FindResourceExW(_: usize, _: *const u16, _: *const u16, _: u16) -> usize {
+    set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn LoadResource(_: usize, _: usize) -> usize {
+    set_last_error(1812); // ERROR_RESOURCE_DATA_NOT_FOUND
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn GetConsoleScreenBufferInfo(_: usize, _: *mut c_void) -> i32 {
+    set_last_error(6); // ERROR_INVALID_HANDLE: no console
+    0
+}
+
+// Thread attribute lists: accepted and not applied (`CreateRemoteThreadEx`
+// starts the thread as `CreateThread` does).
+
+const ATTRIBUTE_SLOT: usize = 24;
+
+#[allow(non_snake_case)]
+pub extern "win64" fn InitializeProcThreadAttributeList(
+    list: *mut c_void,
+    count: u32,
+    _: u32,
+    size: *mut usize,
+) -> i32 {
+    let need = 16 + count as usize * ATTRIBUTE_SLOT;
+    // SAFETY: the title's in-out size.
+    let have = unsafe { std::mem::replace(&mut *size, need) };
+    if list.is_null() || have < need {
+        set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    1
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn UpdateProcThreadAttribute(
+    _: *mut c_void,
+    _: u32,
+    _: usize,
+    _: *const c_void,
+    _: usize,
+    _: *mut c_void,
+    _: *const usize,
+) -> i32 {
+    1
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn DeleteProcThreadAttributeList(_: *mut c_void) {}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CreateRemoteThreadEx(
+    process: usize,
+    security: *const c_void,
+    stack: usize,
+    start: usize,
+    parameter: usize,
+    flags: u32,
+    _attributes: *const c_void,
+    id: *mut u32,
+) -> usize {
+    if process != super::sync::CURRENT_PROCESS {
+        set_last_error(5); // ERROR_ACCESS_DENIED: no other process here
+        return 0;
+    }
+    super::thread::CreateThread(security, stack, start, parameter, flags, id)
+}
+
+/// Cores (`RelationProcessorCore`), and with `RelationAll` one package
+/// holding them all: one logical processor per core (no SMT is reported).
+#[allow(non_snake_case)]
+pub extern "win64" fn GetLogicalProcessorInformationEx(
+    relation: u32,
+    out: *mut u8,
+    length: *mut u32,
+) -> i32 {
+    const CORE: u32 = 0;
+    const PACKAGE: u32 = 3;
+    const ALL: u32 = 0xFFFF;
+    const ENTRY: usize = 48;
+    let n = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(64);
+    let mut entries: Vec<(u32, u64)> = Vec::new();
+    if relation == CORE || relation == ALL {
+        entries.extend((0..n).map(|i| (CORE, 1u64 << i)));
+    }
+    if relation == PACKAGE || relation == ALL {
+        entries.push((PACKAGE, if n == 64 { u64::MAX } else { (1 << n) - 1 }));
+    }
+    let need = (entries.len() * ENTRY) as u32;
+    // SAFETY: the title's in-out length.
+    let have = unsafe { std::mem::replace(&mut *length, need) };
+    if out.is_null() || have < need {
+        set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    for (i, (kind, mask)) in entries.into_iter().enumerate() {
+        let mut e = [0u8; ENTRY];
+        e[0..4].copy_from_slice(&kind.to_le_bytes());
+        e[4..8].copy_from_slice(&(ENTRY as u32).to_le_bytes());
+        // PROCESSOR_RELATIONSHIP: flags, efficiency, reserved, one group.
+        e[30..32].copy_from_slice(&1u16.to_le_bytes());
+        e[32..40].copy_from_slice(&mask.to_le_bytes());
+        // SAFETY: the title's buffer, `need` bytes long (checked).
+        unsafe { std::ptr::copy_nonoverlapping(e.as_ptr(), out.add(i * ENTRY), ENTRY) };
+    }
+    1
+}
+
+/// shortcut: no sound yet on macOS; XAudio2 cannot be made, as on a
+/// console with no audio device (`XAUDIO2_E_DEVICE_INVALIDATED`).
+#[allow(non_snake_case)]
+pub extern "win64" fn XAudio2Create(out: *mut usize, _: u32, _: u32) -> i32 {
+    if !out.is_null() {
+        // SAFETY: the title's out pointer.
+        unsafe { *out = 0 };
+    }
+    0x8896_0004_u32 as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

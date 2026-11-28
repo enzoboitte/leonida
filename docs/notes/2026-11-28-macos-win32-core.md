@@ -145,3 +145,21 @@ Then `SetFileTime` (access and write times; `shortcut:` not the creation time), 
 `DuplicateHandle` (files get a second host descriptor, pseudo handles stay themselves;
 `shortcut:` other objects cannot be duplicated yet). Census over the game's DLLs: 272 of 625;
 `msvcp140.dll` and its two vcruntime DLLs now miss only the C runtime's functions.
+
+## The game's executable, mapped and started
+
+On a user's Xbox Series copy (read where it lies; nothing of it is written here but import
+names), `leonida run` maps the 120 MB executable at its preferred base with its seven title DLLs
+(`vcruntime140`, `vcruntime140_1`, `msvcp140`, `XboxBvhBuilder`, FidelityFX's loader,
+`libHttpClient.GDK`, `Bink2Scarlett`). After this batch every import outside the C runtime is
+bound: COM and WinRT (`HSTRING`s, apartments, activation with no class registered), `oleaut32`'s
+`BSTR`s by ordinal, `crypt32` as an empty store, the rest of WinHTTP failing as with no
+connection, classic ETW, dates and times, memory and processor counts, locale names, `bcrypt`'s
+random bytes, `inet_addr`, the title's Win32 window as an id with no messages, and Media
+Foundation, DirectStorage and the audio processor answering `E_NOTIMPL` (`shortcut:`, their
+modules are Windows-only so far; `XAudio2Create` fails as with no audio device). Missing: 347
+C runtime functions (`api-ms-win-crt-*`, from `ucrtbase.dll`, which the game does not ship).
+
+With `--execute` (`--unimplemented trap`, `LEONIDA_NO_WINDOW=1`) the game's code ran under
+Rosetta 2 through the TLS callbacks and DLL entry points until its first C runtime call,
+`_initialize_onexit_table`, which trapped as it should with no `ucrtbase.dll`.
