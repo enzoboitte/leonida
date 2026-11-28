@@ -98,3 +98,17 @@ Three tests: alignment, 32-bit and 40-bit ranges, 2 MiB alignment and the query'
 physical pages mapped at two reservations, a byte written through one address read through the
 other, unmapped, freed pages still readable where mapped; the title's hooks taking over
 `XMemAlloc`. With the rest, `--target x86_64-apple-darwin --locked`: 167 passed, 5 ignored.
+
+## Network and device type
+
+`modules::win32::net` (macOS) serves `ws2_32.dll` and `winhttp.dll` as a console with its cable
+out: `WSAStartup` succeeds, creating a socket fails with `WSAENETDOWN` (so every call on one fails
+with `WSAENOTSOCK`), name lookups fail with `WSAHOST_NOT_FOUND`, a WinHTTP session opens but
+`WinHttpConnect` fails with `ERROR_WINHTTP_CANNOT_CONNECT`, proxy detection fails. Winsock's
+well-known ordinals are served too. Nothing can reach a network, which keeps "offline by design".
+`shortcut:` no loopback sockets either (Windows' `modules::net` allows loopback).
+
+`modules::xsystem`'s registry part (the console model titles read from
+`HKLM\...\OEM\ConsoleMode`) now builds on macOS: keys and values that are not ours are missing
+there, where Windows hands them to the host's registry. Its test of that hand-over is ignored
+off Windows.

@@ -133,7 +133,7 @@ static ANALYTICS_VTABLE: Methods<4> = Methods([
 /// The device type is not a runtime call: code linked into the title reads
 /// `ConsoleMode` from this key (`RegOpenKeyW`, `RegQueryValueExW`) and
 /// takes a missing value for a PC.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod device_type {
     #![allow(non_snake_case)]
 
@@ -141,8 +141,21 @@ mod device_type {
 
     use leonida_gpu::console::{self, Console};
 
+    #[cfg(windows)]
     use crate::modules::files::host;
     use crate::{HleModule, hle_export};
+
+    /// A host without a registry (macOS): every key and value that is not
+    /// ours is missing, through a function of the same signature.
+    #[cfg(not(windows))]
+    macro_rules! host {
+        ($dll:literal, $name:literal: extern "win64" fn($($arg:ty),* $(,)?) -> u32) => {{
+            extern "win64" fn missing($(_: $arg),*) -> u32 {
+                FILE_NOT_FOUND
+            }
+            missing
+        }};
+    }
 
     type Key = *mut c_void;
     const LOCAL_MACHINE: Key = 0xffff_ffff_8000_0002_u64 as Key;
@@ -340,6 +353,7 @@ mod device_type {
         }
 
         #[test]
+        #[cfg_attr(not(windows), ignore = "no host registry off Windows: other keys are missing there")]
         fn other_keys_reach_the_host() {
             let mut key = std::ptr::null_mut();
             let path = w(r"Software\Microsoft\Windows NT\CurrentVersion");
@@ -362,7 +376,7 @@ mod device_type {
         }
     }
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) use device_type::module;
 
 #[cfg(test)]

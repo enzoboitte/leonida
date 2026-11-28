@@ -76,11 +76,13 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(net::module());
     #[cfg(windows)]
     all.push(xmem::module());
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     all.push(xsystem::module());
     #[cfg(target_os = "macos")]
     all.push(win32::module());
     #[cfg(target_os = "macos")]
     all.push(win32::xmem::module());
+    #[cfg(target_os = "macos")]
+    all.push(win32::net::module());
     all
 }

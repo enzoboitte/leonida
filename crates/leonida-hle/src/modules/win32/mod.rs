@@ -11,6 +11,7 @@
 
 pub mod files;
 mod memory;
+pub mod net;
 mod sync;
 mod system;
 mod thread;
