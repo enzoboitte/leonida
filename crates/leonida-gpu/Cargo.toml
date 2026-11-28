@@ -16,6 +16,11 @@ leonida-formats.workspace = true
 leonida-pipeline.workspace = true
 leonida-shader.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-metal.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 
