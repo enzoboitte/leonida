@@ -36,6 +36,10 @@ object = { version = "0.41.0", default-features = false, features = ["read_core"
 windows-sys = "0.61.2"
 # Host calls on macOS (mmap, signals).
 libc = "0.2.191"
+# Metal on macOS: the GPU back end there.
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLBuffer", "MTLResource", "MTLLibrary", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLTypes", "MTLAllocation"] }
 windows = "0.62.2"
 windows-core = "0.62.2"
 blake3 = "1.8.7"

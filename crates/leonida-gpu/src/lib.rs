@@ -23,6 +23,8 @@
 // back end yet), so code the Windows paths use goes unused there.
 #![cfg_attr(not(windows), allow(dead_code, unused_variables, unused_imports, unused_mut))]
 
+#[cfg(target_os = "macos")]
+pub mod metal;
 pub mod adapter;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
