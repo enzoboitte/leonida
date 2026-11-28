@@ -316,6 +316,7 @@ dependencies = [
  "leonida-gpu",
  "leonida-loader",
  "leonida-pe",
+ "libc",
  "opus-pure",
  "tempfile",
  "tracing",

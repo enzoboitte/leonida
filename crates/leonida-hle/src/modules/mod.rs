@@ -44,6 +44,9 @@ pub mod xpackage;
 pub mod xstore;
 pub mod xsystem;
 pub mod xuser;
+// What Windows' own DLLs give a title, for hosts without them.
+#[cfg(target_os = "macos")]
+pub mod win32;
 
 use crate::HleModule;
 
@@ -73,5 +76,7 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(xmem::module());
     #[cfg(windows)]
     all.push(xsystem::module());
+    #[cfg(target_os = "macos")]
+    all.push(win32::module());
     all
 }

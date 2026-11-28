@@ -96,7 +96,7 @@ mod tests {
     fn strict_policy_reports_missing() {
         let r = HleResolver::new(HostPolicy::none());
         assert_eq!(
-            r.classify("api-ms-win-core-synch-l1-1-0.dll", &name("Sleep")),
+            r.classify("api-ms-win-core-synch-l1-1-0.dll", &name("CreateWaitableTimerW")),
             None
         );
     }
