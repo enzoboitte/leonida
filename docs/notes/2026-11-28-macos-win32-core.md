@@ -112,3 +112,30 @@ well-known ordinals are served too. Nothing can reach a network, which keeps "of
 `HKLM\...\OEM\ConsoleMode`) now builds on macOS: keys and values that are not ours are missing
 there, where Windows hands them to the host's registry. Its test of that hand-over is ignored
 off Windows.
+
+## Thread pool and the rest the game's DLLs import
+
+Run on the game's own DLLs (`leonida census --strict` over a user's Xbox Series copy, read where
+it lies; only import names are written here), 17 images, 625 functions: 204 were served on macOS
+before this, 266 after. Added (`modules::win32::pool` and `misc`): Windows' thread pool (work
+items, timers with periods and cancelling, waits on handles, `QueueUserWorkItem`) on loader
+threads, `EncodePointer`/`DecodePointer`, `UnhandledExceptionFilter`, `RtlPcToFileHeader` (from
+the loader's image list, `leonida_loader::image_base`), `LocalAlloc`/`LocalFree`/`GlobalFree`,
+`FormatMessageW/A` (`shortcut:` "Error <n>" for system messages), `DebugBreak`,
+`RaiseFailFastException`, strings and locale (`lstrlenW`, `lstrcmpiW`, `CompareStringEx`,
+`GetStringType(Ex)W`, `LCMapStringEx`, `GetLocaleInfoEx` for the name, `shortcut:` en-US and
+ordinal comparisons), ETW providers as a console with no tracing session, and app state
+notification registration (`shortcut:` nothing sends a notice yet).
+
+What is left of the 359 missing: the C runtime's API sets (from `ucrtbase.dll`, which the game
+does not ship), `msvcp140`/`vcruntime140` (the game ships them; `leonida run` maps them as title
+DLLs, which the census does not count), WinRT and COM, `crypt32`, `oleaut32`, `xaudio2_9`, more
+of WinHTTP, classic ETW, and a few file and process functions.
+
+**Mapped from the game's folder**, without running any of it (`leonida run` on `msvcp140.dll`,
+no `--execute`): `vcruntime140.dll` and `vcruntime140_1.dll` mapped first, `msvcp140.dll` away from
+its preferred base (so its relocations applied), 134 imports bound to us, 22 between the three,
+106 missing: 101 of them the C runtime's, 5 rare file functions. The game's executable was not in
+that copy, so the game itself was not started.
+
+7 more tests (work items, timers, waits; strings; messages and local blocks).
