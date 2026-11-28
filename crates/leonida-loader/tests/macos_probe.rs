@@ -9,8 +9,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use leonida_loader::{
-    ImportResolver, MappedImage, Provenance, Resolution, UnimplementedPolicy, enter_thread,
-    seh_export, unimplemented_call_count,
+    ImportResolver, MappedImage, Provenance, Resolution, UnimplementedPolicy, disable_thread_calls,
+    enter_thread, seh_export, spawn_thread, unimplemented_call_count,
 };
 use leonida_pe::ImportSymbol;
 
@@ -91,6 +91,9 @@ fn probe() -> &'static Probe {
             "XGameRuntimeInitialize, RaiseException, RtlUnwindEx"
         );
         assert_ne!(image.base() as u64, preferred, "mapped elsewhere");
+        enter_thread();
+        // SAFETY: imports are bound, and this thread has a TEB.
+        unsafe { image.attach() }.unwrap();
         let missing = report
             .missing
             .iter()
@@ -138,18 +141,18 @@ fn imports_reach_our_functions_and_stubs() {
 
 #[test]
 fn each_thread_gets_its_own_teb_and_tls_block() {
-    let image = &probe().image;
+    probe();
     let teb: extern "win64" fn() -> u64 = export("probe_teb");
     let bump: extern "win64" fn() -> u32 = export("probe_tls_bump");
 
-    let here = enter_thread(image);
-    assert_eq!(enter_thread(image), here, "once per thread");
+    let here = enter_thread();
+    assert_eq!(enter_thread(), here, "once per thread");
     assert_eq!(teb(), here as u64);
     assert_eq!(bump(), 6, "a fresh copy of the template (5)");
     assert_eq!(bump(), 7);
 
     let there = std::thread::spawn(move || {
-        let there = enter_thread(&probe().image);
+        let there = enter_thread();
         assert_eq!(teb(), there as u64);
         assert_eq!(bump(), 6, "not this thread's neighbour's block");
         there
@@ -238,4 +241,72 @@ fn an_unhandled_fault_is_named_and_ends_the_process() {
     let named = text.contains("unhandled exception 0xc0000005 at title+")
         && text.contains("accessing 0x30");
     assert!(named, "stderr: {text}");
+}
+
+/// Counts of the fixture's notices: `source` 0 is its TLS callback, 1 its
+/// `DllMain`.
+fn notices(source: u32, reason: u32) -> u32 {
+    let count: extern "win64" fn(u32, u32) -> u32 = export("probe_notices");
+    count(source, reason)
+}
+
+const PROCESS_ATTACH: u32 = 1;
+const THREAD_ATTACH: u32 = 2;
+const THREAD_DETACH: u32 = 3;
+
+#[test]
+fn an_attached_dll_hears_of_its_attach_and_of_title_threads() {
+    let image = &probe().image;
+    assert_eq!(notices(0, PROCESS_ATTACH), 1, "TLS callback");
+    assert_eq!(notices(1, PROCESS_ATTACH), 1, "DllMain");
+
+    let thread = image.export("probe_thread").unwrap();
+    let before = [0, 1].map(|s| [THREAD_ATTACH, THREAD_DETACH].map(|r| notices(s, r)));
+    // SAFETY: `probe_thread` is a thread procedure.
+    let joined = unsafe { spawn_thread(thread, 100, 0) }.unwrap().join();
+    assert_eq!(
+        joined.unwrap(),
+        100 + 6,
+        "its parameter, and a fresh TLS block"
+    );
+    for (s, [attach, detach]) in [0, 1].into_iter().zip(before) {
+        assert_eq!(notices(s, THREAD_ATTACH), attach + 1, "source {s}");
+        assert_eq!(notices(s, THREAD_DETACH), detach + 1, "source {s}");
+    }
+
+    assert!(disable_thread_calls(image.base()));
+    let dll_main = notices(1, THREAD_ATTACH);
+    let callback = notices(0, THREAD_ATTACH);
+    // SAFETY: as above.
+    unsafe { spawn_thread(thread, 0, 0) }
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(notices(1, THREAD_ATTACH), dll_main, "DllMain is quiet now");
+    assert_eq!(
+        notices(0, THREAD_ATTACH),
+        callback + 1,
+        "TLS callbacks still hear"
+    );
+}
+
+#[test]
+fn an_exe_runs_with_its_static_tls_in_slot_0() {
+    probe(); // the DLL first, so it takes slot 1
+    let exe = build_probe().with_file_name("probe_exe.exe");
+    let bytes = std::fs::read(exe).unwrap();
+    let (exe, _) =
+        MappedImage::load(&bytes, &TestResolver, UnimplementedPolicy::ReturnZero).unwrap();
+    assert!(!exe.info().is_dll());
+    // SAFETY: the exe imports nothing.
+    let main = unsafe { exe.run_main(Vec::new()) }.unwrap();
+    assert_eq!(main.join().unwrap().unwrap(), 40 + 2);
+    // The DLL, mapped first, still reads its own slot.
+    let bump: extern "win64" fn() -> u32 = export("probe_tls_bump");
+    std::thread::spawn(move || {
+        enter_thread();
+        assert_eq!(bump(), 6);
+    })
+    .join()
+    .unwrap();
 }
