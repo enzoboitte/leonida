@@ -1886,6 +1886,16 @@ impl ValueWait {
         if self.address == 0 {
             return true;
         }
+        // shortcut: off Windows a wait reads as met: there is no host device to
+        // wait on yet (the macOS port has no GPU back end).
+        #[cfg(not(windows))]
+        return true;
+        #[cfg(windows)]
+        self.holds_read(bytes)
+    }
+
+    #[cfg(windows)]
+    fn holds_read(&self, bytes: usize) -> bool {
         static ASK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *ASK.get_or_init(|| std::env::var_os("LEONIDA_WAIT_ASK").is_some_and(|v| v == "1"))
             && !crate::texture::committed(self.address as *const u8, bytes)

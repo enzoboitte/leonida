@@ -19,6 +19,10 @@
 // convention (`extern "win64"`), which exists only on x86-64: elsewhere the crate is empty.
 #![cfg(target_arch = "x86_64")]
 
+// Off Windows only the parts with no host device build (the macOS port has no GPU
+// back end yet), so code the Windows paths use goes unused there.
+#![cfg_attr(not(windows), allow(dead_code, unused_variables, unused_imports, unused_mut))]
+
 pub mod adapter;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;

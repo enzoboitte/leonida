@@ -17,8 +17,11 @@ extern "win64" fn create_device(
     iid: *const Iid,
     out: *mut *const Object,
 ) -> HRESULT {
-    leonida_gpu::resource::use_allocator(super::xmem::XMemAlloc, super::xmem::XMemFree);
-    leonida_gpu::resource::use_page_mapper(super::xmem::map_alias);
+    #[cfg(windows)]
+    {
+        leonida_gpu::resource::use_allocator(super::xmem::XMemAlloc, super::xmem::XMemFree);
+        leonida_gpu::resource::use_page_mapper(super::xmem::map_alias);
+    }
     #[cfg(windows)]
     leonida_gpu::on_failure(host_gpu_failed);
     device::create(adapter, parameters, iid, out)

@@ -15,6 +15,10 @@
 // convention (`extern "win64"`), which exists only on x86-64: elsewhere the crate is empty.
 #![cfg(target_arch = "x86_64")]
 
+// Off Windows the modules that need host Windows are left out so far (the macOS
+// port is under way), so code only they use goes unused there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports, unused_mut, unused_variables))]
+
 mod host;
 pub mod modules;
 mod registry;
