@@ -32,7 +32,7 @@ struct Heap {
 }
 
 /// Device method.
-pub(crate) extern "system" fn create(
+pub(crate) extern "win64" fn create(
     _: This,
     desc: *const Desc,
     iid: *const Iid,
@@ -50,7 +50,7 @@ pub(crate) extern "system" fn create(
     object::hand_out(QUERY_HEAP, heap, iid, &HEAP_IIDS, out)
 }
 
-extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
+extern "win64" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
     object::answer(
         QUERY_HEAP,
         iid,
@@ -58,7 +58,7 @@ extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT
         out,
     )
 }
-extern "system" fn release(this: This) -> u32 {
+extern "win64" fn release(this: This) -> u32 {
     object::release_boxed::<Heap>(this)
 }
 

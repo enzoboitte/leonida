@@ -35,7 +35,7 @@ type This = *const Object;
 static PROFILE: u8 = 0;
 static TEXT: u8 = 0;
 
-extern "system" fn profile_card_async(
+extern "win64" fn profile_card_async(
     _: This,
     block: *mut AsyncBlock,
     _user: *const c_void,
@@ -44,14 +44,14 @@ extern "system" fn profile_card_async(
     tracing::info!(xuid, "profile card: nothing to show");
     xasync::finished(block, (&raw const PROFILE).cast(), S_OK)
 }
-extern "system" fn profile_card_result(_: This, block: *mut AsyncBlock) -> HRESULT {
+extern "win64" fn profile_card_result(_: This, block: *mut AsyncBlock) -> HRESULT {
     let none = std::ptr::null_mut();
     xasync::XAsyncGetResult(block, (&raw const PROFILE).cast(), 0, none, none.cast())
 }
 
 /// The title treats `E_ABORT` as cancelled and goes on; any
 /// other failure as an error.
-extern "system" fn text_entry_async(
+extern "win64" fn text_entry_async(
     _: This,
     block: *mut AsyncBlock,
     title: *const c_char,
@@ -78,7 +78,7 @@ extern "system" fn text_entry_async(
     })
 }
 /// Bytes of the result, its NUL included.
-extern "system" fn text_entry_size(_: This, block: *mut AsyncBlock, out: *mut u32) -> HRESULT {
+extern "win64" fn text_entry_size(_: This, block: *mut AsyncBlock, out: *mut u32) -> HRESULT {
     let mut size = 0;
     let hr = xasync::XAsyncGetResultSize(block, &mut size);
     if hr < 0 {
@@ -86,7 +86,7 @@ extern "system" fn text_entry_size(_: This, block: *mut AsyncBlock, out: *mut u3
     }
     put(out, size as u32)
 }
-extern "system" fn text_entry_result(
+extern "win64" fn text_entry_result(
     _: This,
     block: *mut AsyncBlock,
     size: u32,
@@ -111,9 +111,16 @@ fn limit(typed: &str, max: u32) -> String {
 }
 
 /// Asks the user in a modal host dialog; `None` if dismissed.
-#[cfg(not(test))]
+#[cfg(all(not(test), windows))]
 fn ask(title: &str, description: &str, default: &str, max: u32) -> Option<String> {
     dialog::ask(title, description, default, max)
+}
+
+/// shortcut: no dialog off Windows yet; every text entry is cancelled. A
+/// native one (AppKit on macOS) belongs here.
+#[cfg(all(not(test), not(windows)))]
+fn ask(_: &str, _: &str, _: &str, _: u32) -> Option<String> {
+    None
 }
 
 /// Tests answer for the user: "typed" for a title starting with "Type",
@@ -123,6 +130,7 @@ fn ask(title: &str, _: &str, default: &str, _: u32) -> Option<String> {
     title.starts_with("Type").then(|| format!("{default}typed"))
 }
 
+#[cfg(windows)]
 mod dialog {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -276,8 +284,8 @@ mod tests {
     fn dialogs_end_with_what_was_typed() {
         let this: This = &OBJECT;
         let mut b = block();
-        type Card = extern "system" fn(This, *mut AsyncBlock, *const c_void, u64) -> HRESULT;
-        type Done = extern "system" fn(This, *mut AsyncBlock) -> HRESULT;
+        type Card = extern "win64" fn(This, *mut AsyncBlock, *const c_void, u64) -> HRESULT;
+        type Done = extern "win64" fn(This, *mut AsyncBlock) -> HRESULT;
         assert_eq!(
             method::<Card>(&OBJECT, 0x38)(this, &mut b, std::ptr::null(), 1),
             S_OK
@@ -285,7 +293,7 @@ mod tests {
         assert_eq!(xasync::XAsyncGetStatus(&mut b, true), S_OK);
         assert_eq!(method::<Done>(&OBJECT, 0x40)(this, &mut b), S_OK);
 
-        type Entry = extern "system" fn(
+        type Entry = extern "win64" fn(
             This,
             *mut AsyncBlock,
             *const c_char,
@@ -294,8 +302,8 @@ mod tests {
             u32,
             u32,
         ) -> HRESULT;
-        type Size = extern "system" fn(This, *mut AsyncBlock, *mut u32) -> HRESULT;
-        type Result_ = extern "system" fn(This, *mut AsyncBlock, u32, *mut c_char, *mut u32) -> HRESULT;
+        type Size = extern "win64" fn(This, *mut AsyncBlock, *mut u32) -> HRESULT;
+        type Result_ = extern "win64" fn(This, *mut AsyncBlock, u32, *mut c_char, *mut u32) -> HRESULT;
         let null = std::ptr::null();
         let entry = method::<Entry>(&OBJECT, 0x88);
         // Dismissed: cancelled.

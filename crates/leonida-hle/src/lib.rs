@@ -11,6 +11,14 @@
 //! Resolution order for every import: an implementation in [`modules`],
 //! then the host if [`HostPolicy`] allows that DLL, then `Missing`.
 
+// Title code is x86-64, and calls what this crate hands it with the Windows x64
+// convention (`extern "win64"`), which exists only on x86-64: elsewhere the crate is empty.
+#![cfg(target_arch = "x86_64")]
+
+// Off Windows the modules that need host Windows are left out so far (the macOS
+// port is under way), so code only they use goes unused there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports, unused_mut, unused_variables))]
+
 mod host;
 pub mod modules;
 mod registry;
@@ -88,7 +96,7 @@ mod tests {
     fn strict_policy_reports_missing() {
         let r = HleResolver::new(HostPolicy::none());
         assert_eq!(
-            r.classify("api-ms-win-core-synch-l1-1-0.dll", &name("Sleep")),
+            r.classify("api-ms-win-core-synch-l1-1-0.dll", &name("CreateWaitableTimerW")),
             None
         );
     }

@@ -19,7 +19,7 @@ use windows_sys::core::{PCSTR, PCWSTR, w};
 
 use crate::{HleModule, hle_export};
 
-type Routine = extern "system" fn(quiesced: u8, context: *mut c_void);
+type Routine = extern "win64" fn(quiesced: u8, context: *mut c_void);
 
 /// Registration id, routine and context of each suspend routine.
 static ROUTINES: Mutex<Vec<(usize, Routine, usize)>> = Mutex::new(Vec::new());
@@ -33,7 +33,7 @@ const SUSPEND_DEADLINE: Duration = Duration::from_secs(1);
 
 const ERROR_INVALID_PARAMETER: u32 = 87;
 
-pub extern "system" fn RegisterAppStateChangeNotification(
+pub extern "win64" fn RegisterAppStateChangeNotification(
     routine: Option<Routine>,
     context: *mut c_void,
     registration: *mut usize,
@@ -52,14 +52,14 @@ pub extern "system" fn RegisterAppStateChangeNotification(
     0
 }
 
-pub extern "system" fn UnregisterAppStateChangeNotification(registration: usize) {
+pub extern "win64" fn UnregisterAppStateChangeNotification(registration: usize) {
     routines().retain(|&(id, ..)| id != registration);
 }
 
 /// The window procedure a title window had before ours.
 const TITLE_PROC: PCWSTR = w!("leonida.wndproc");
 
-pub extern "system" fn CreateWindowExW(
+pub extern "win64" fn CreateWindowExW(
     ex_style: u32,
     class: PCWSTR,
     name: PCWSTR,
@@ -85,7 +85,7 @@ pub extern "system" fn CreateWindowExW(
 }
 
 /// See [`CreateWindowExW`].
-pub extern "system" fn CreateWindowExA(
+pub extern "win64" fn CreateWindowExA(
     ex_style: u32,
     class: PCSTR,
     name: PCSTR,
@@ -162,7 +162,7 @@ fn hook(hwnd: HWND) {
     }
 }
 
-extern "system" fn window_proc(
+extern "win64" fn window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -313,7 +313,7 @@ pub(crate) fn module() -> HleModule {
 mod tests {
     use super::*;
 
-    extern "system" fn noop(_: u8, _: *mut c_void) {}
+    extern "win64" fn noop(_: u8, _: *mut c_void) {}
 
     #[test]
     fn registrations_come_and_go() {
@@ -383,7 +383,7 @@ mod tests {
 
     /// Stands in for a title's procedure: notes system commands and acts
     /// on none of them (no menu loop, no minimising).
-    extern "system" fn recording(
+    extern "win64" fn recording(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,

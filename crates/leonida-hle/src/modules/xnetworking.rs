@@ -63,24 +63,24 @@ const OFFLINE: ConnectivityHint = ConnectivityHint {
 
 type This = *const Object;
 
-extern "system" fn udp_port(_: This, out: *mut u16) -> HRESULT {
+extern "win64" fn udp_port(_: This, out: *mut u16) -> HRESULT {
     put(out, UDP_PORT)
 }
 
 /// Tells our port queries apart from other calls on the same block.
 static PORT: u8 = 0;
 
-extern "system" fn udp_port_async(_: This, block: *mut AsyncBlock) -> HRESULT {
+extern "win64" fn udp_port_async(_: This, block: *mut AsyncBlock) -> HRESULT {
     xasync::finished_with(block, (&raw const PORT).cast(), Ok(xasync::bytes(UDP_PORT)))
 }
-extern "system" fn udp_port_result(_: This, block: *mut AsyncBlock, out: *mut u16) -> HRESULT {
+extern "win64" fn udp_port_result(_: This, block: *mut AsyncBlock, out: *mut u16) -> HRESULT {
     xasync::result(block, (&raw const PORT).cast(), out)
 }
 
 static SECURITY: u8 = 0;
 
 /// The allow list comes from the service: unreachable offline.
-extern "system" fn security_info_async(
+extern "win64" fn security_info_async(
     _: This,
     url: *const c_char,
     block: *mut AsyncBlock,
@@ -91,10 +91,10 @@ extern "system" fn security_info_async(
     );
     xasync::finished(block, (&raw const SECURITY).cast(), UNREACHABLE)
 }
-extern "system" fn security_info_size(_: This, block: *mut AsyncBlock, out: *mut usize) -> HRESULT {
+extern "win64" fn security_info_size(_: This, block: *mut AsyncBlock, out: *mut usize) -> HRESULT {
     xasync::XAsyncGetResultSize(block, out)
 }
-extern "system" fn security_info_result(
+extern "win64" fn security_info_result(
     _: This,
     block: *mut AsyncBlock,
     size: usize,
@@ -112,7 +112,7 @@ extern "system" fn security_info_result(
 }
 
 /// No security information can exist offline, so no certificate passes.
-extern "system" fn verify_certificate(
+extern "win64" fn verify_certificate(
     _: This,
     _request: *mut c_void,
     _info: *const c_void,
@@ -120,12 +120,12 @@ extern "system" fn verify_certificate(
     UNREACHABLE
 }
 
-extern "system" fn connectivity_hint(_: This, out: *mut ConnectivityHint) -> HRESULT {
+extern "win64" fn connectivity_hint(_: This, out: *mut ConnectivityHint) -> HRESULT {
     put(out, OFFLINE)
 }
 
 /// The hint never changes offline, so the callback never runs.
-extern "system" fn register(
+extern "win64" fn register(
     _: This,
     _queue: *const c_void,
     _context: *mut c_void,
@@ -134,7 +134,7 @@ extern "system" fn register(
 ) -> HRESULT {
     put(out, token())
 }
-extern "system" fn unregister(_: This, _token: u64, _wait: bool) -> bool {
+extern "win64" fn unregister(_: This, _token: u64, _wait: bool) -> bool {
     true
 }
 
@@ -176,15 +176,15 @@ mod tests {
     #[test]
     fn offline_but_initialized() {
         let this: This = &OBJECT;
-        type Hint = extern "system" fn(This, *mut ConnectivityHint) -> HRESULT;
+        type Hint = extern "win64" fn(This, *mut ConnectivityHint) -> HRESULT;
         let mut hint = OFFLINE;
         hint.initialized = false;
         assert_eq!(method::<Hint>(&OBJECT, 0x78)(this, &mut hint), S_OK);
         assert!(hint.initialized && hint.level == 1);
         assert_eq!(size_of::<ConnectivityHint>(), 16);
 
-        type Begin = extern "system" fn(This, *mut AsyncBlock) -> HRESULT;
-        type Port = extern "system" fn(This, *mut AsyncBlock, *mut u16) -> HRESULT;
+        type Begin = extern "win64" fn(This, *mut AsyncBlock) -> HRESULT;
+        type Port = extern "win64" fn(This, *mut AsyncBlock, *mut u16) -> HRESULT;
         let mut b = block();
         assert_eq!(method::<Begin>(&OBJECT, 0x20)(this, &mut b), S_OK);
         assert_eq!(xasync::XAsyncGetStatus(&mut b, true), S_OK);
@@ -192,8 +192,8 @@ mod tests {
         assert_eq!(method::<Port>(&OBJECT, 0x28)(this, &mut b, &mut port), S_OK);
         assert_eq!(port, 3074);
 
-        type Url = extern "system" fn(This, *const c_char, *mut AsyncBlock) -> HRESULT;
-        type Size = extern "system" fn(This, *mut AsyncBlock, *mut usize) -> HRESULT;
+        type Url = extern "win64" fn(This, *const c_char, *mut AsyncBlock) -> HRESULT;
+        type Size = extern "win64" fn(This, *mut AsyncBlock, *mut usize) -> HRESULT;
         let mut b = block();
         let url = c"https://example.invalid/";
         assert_eq!(

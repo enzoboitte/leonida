@@ -5,7 +5,6 @@ use std::ffi::{CString, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result, bail};
 use leonida_pe::{ImageInfo, ImportSymbol};
@@ -13,10 +12,10 @@ use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW};
 use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
 
-use crate::thunks::{ImportSite, ThunkBlock, UnimplementedPolicy};
+use crate::thunks::{UnimplementedPolicy, resolve_imports};
 use crate::{
-    DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, ImportResolver, PreparedImage, Provenance, Resolution,
-    prepare,
+    BindReport, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, ImportResolver, PreparedImage, Provenance,
+    Resolution, prepare,
 };
 
 /// A title image mapped into this process. A clone names the same mapping
@@ -33,21 +32,6 @@ pub struct LoadedImage {
 unsafe impl Send for LoadedImage {}
 // SAFETY: as above; `LoadedImage` has no interior mutability.
 unsafe impl Sync for LoadedImage {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MissingImport {
-    pub dll: String,
-    pub symbol: String,
-}
-
-/// Outcome of [`LoadedImage::bind_imports`].
-#[derive(Debug, Default, Clone)]
-pub struct BindReport {
-    pub hle: usize,
-    pub host: usize,
-    pub title: usize,
-    pub missing: Vec<MissingImport>,
-}
 
 /// Writes the prepared copy into `dir` and maps it with the Windows loader.
 ///
@@ -229,51 +213,7 @@ impl LoadedImage {
         resolver: &dyn ImportResolver,
         policy: UnimplementedPolicy,
     ) -> Result<BindReport> {
-        let mut report = BindReport::default();
-        let mut slots: Vec<(u32, usize)> = Vec::with_capacity(self.info.import_count());
-        let mut unresolved: Vec<(u32, &str, &ImportSymbol)> = Vec::new();
-
-        // Delay-load slots are bound eagerly too, so the title's own
-        // delay-load helper (which would ask the host) never runs.
-        for module in self.info.imports.iter().chain(&self.info.delay_imports) {
-            for entry in &module.entries {
-                match resolver.resolve(&module.dll, &entry.symbol) {
-                    Resolution::Found {
-                        address,
-                        provenance,
-                    } => {
-                        match provenance {
-                            Provenance::Hle => report.hle += 1,
-                            Provenance::Host => report.host += 1,
-                            Provenance::Title => report.title += 1,
-                        }
-                        slots.push((entry.iat_slot_rva, address));
-                    }
-                    Resolution::Missing => {
-                        unresolved.push((entry.iat_slot_rva, &module.dll, &entry.symbol));
-                    }
-                }
-            }
-        }
-
-        if !unresolved.is_empty() {
-            let mut block = ThunkBlock::new(unresolved.len())?;
-            for (slot, dll, symbol) in unresolved {
-                let site: &'static ImportSite = Box::leak(Box::new(ImportSite {
-                    dll: dll.to_owned(),
-                    symbol: symbol.to_string(),
-                    policy,
-                    calls: AtomicU64::new(0),
-                }));
-                slots.push((slot, block.emit(site)?));
-                report.missing.push(MissingImport {
-                    dll: site.dll.clone(),
-                    symbol: site.symbol.clone(),
-                });
-            }
-            block.seal()?;
-        }
-
+        let (slots, report) = resolve_imports(&self.info, resolver, policy)?;
         self.write_slots(&slots)?;
         tracing::info!(
             hle = report.hle,

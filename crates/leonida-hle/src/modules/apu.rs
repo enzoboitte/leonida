@@ -143,7 +143,7 @@ fn lock(c: &Connection) -> std::sync::MutexGuard<'_, State> {
     c.state.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub extern "system" fn XApuConnect(
+pub extern "win64" fn XApuConnect(
     input: *const ConnectInput,
     output: *mut ConnectOutput,
     handle: *mut *mut Connection,
@@ -217,7 +217,7 @@ pub extern "system" fn XApuConnect(
     S_OK
 }
 
-pub extern "system" fn XApuDisconnect(handle: *mut Connection) -> HRESULT {
+pub extern "win64" fn XApuDisconnect(handle: *mut Connection) -> HRESULT {
     if handle.is_null() {
         return E_INVALIDARG;
     }
@@ -232,7 +232,7 @@ pub extern "system" fn XApuDisconnect(handle: *mut Connection) -> HRESULT {
     S_OK
 }
 
-pub extern "system" fn XApuEnqueueCommand(
+pub extern "win64" fn XApuEnqueueCommand(
     handle: *mut Connection,
     command: *const CommandId,
     total: *mut u32,
@@ -353,7 +353,7 @@ fn process(decoder: &mut OpusDecoder, options: u32, command: &Process, result: &
     result.output_length = (frames * channels * 4) as u32;
 }
 
-pub extern "system" fn XApuDequeueResult(handle: *mut Connection, out: *mut ApuResult) -> HRESULT {
+pub extern "win64" fn XApuDequeueResult(handle: *mut Connection, out: *mut ApuResult) -> HRESULT {
     if handle.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
@@ -370,7 +370,7 @@ pub extern "system" fn XApuDequeueResult(handle: *mut Connection, out: *mut ApuR
     S_OK
 }
 
-pub extern "system" fn XApuGetResultCount(handle: *mut Connection, total: *mut u32) -> u32 {
+pub extern "win64" fn XApuGetResultCount(handle: *mut Connection, total: *mut u32) -> u32 {
     if handle.is_null() {
         return 0;
     }

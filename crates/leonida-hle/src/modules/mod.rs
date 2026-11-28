@@ -1,7 +1,10 @@
 //! Implementations, one module per area of the console API.
 //!
-//! Adding an API: write an `extern "system"` function named exactly like
+//! Adding an API: write an `extern "win64"` function named exactly like
 //! the import, then list it with `hle_export!` in the module's `module()`.
+//! Title code calls it with the Windows x64 convention: on Windows that is
+//! also "system", on macOS "system" is the System V one. Callbacks given to
+//! the host's own APIs stay "system".
 //! Run `leonida census` over your titles to see what is still missing.
 //!
 //! Planned areas (driven by census results, not by completeness):
@@ -41,6 +44,11 @@ pub mod xpackage;
 pub mod xstore;
 pub mod xsystem;
 pub mod xuser;
+// What Windows' own DLLs give a title, for hosts without them.
+#[cfg(target_os = "macos")]
+pub mod win32;
+#[cfg(target_os = "macos")]
+pub use win32::files;
 
 use crate::HleModule;
 
@@ -70,5 +78,7 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(xmem::module());
     #[cfg(windows)]
     all.push(xsystem::module());
+    #[cfg(target_os = "macos")]
+    all.push(win32::module());
     all
 }

@@ -1,8 +1,21 @@
+#[cfg(any(not(target_os = "macos"), test))]
 use std::path::Path;
 
-use anyhow::{Context, Result};
+#[cfg(windows)]
+use anyhow::Context;
+#[cfg(any(not(target_os = "macos"), test))]
+use anyhow::Result;
 
+#[cfg(not(target_os = "macos"))]
 use crate::{Console, Unimplemented};
+
+#[cfg(target_os = "macos")]
+pub use crate::run_macos::run;
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console) -> Result<()> {
+    anyhow::bail!("running titles requires Windows or an x86-64 Mac (Rosetta 2)")
+}
 
 #[cfg(windows)]
 pub fn run(
@@ -519,9 +532,4 @@ mod tests {
         other.join().unwrap();
         assert_eq!(*order.lock().unwrap(), [1, 2]);
     }
-}
-
-#[cfg(not(windows))]
-pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console) -> Result<()> {
-    anyhow::bail!("running titles requires Windows")
 }

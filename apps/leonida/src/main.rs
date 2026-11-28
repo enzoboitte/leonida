@@ -7,6 +7,8 @@ mod census;
 mod graphics;
 mod inspect;
 mod run;
+#[cfg(target_os = "macos")]
+mod run_macos;
 mod shader;
 mod translate;
 

@@ -37,11 +37,11 @@ const WORK: u32 = 0;
 const COMPLETION: u32 = 1;
 const INFINITE: u32 = u32::MAX;
 
-type Callback = extern "system" fn(*mut c_void, bool);
-type MonitorCallback = extern "system" fn(*mut c_void, *const Queue, u32);
-type TerminatedCallback = extern "system" fn(*mut c_void);
-type CompletionRoutine = extern "system" fn(*mut AsyncBlock);
-type Provider = extern "system" fn(u32, *const ProviderData) -> HRESULT;
+type Callback = extern "win64" fn(*mut c_void, bool);
+type MonitorCallback = extern "win64" fn(*mut c_void, *const Queue, u32);
+type TerminatedCallback = extern "win64" fn(*mut c_void);
+type CompletionRoutine = extern "win64" fn(*mut AsyncBlock);
+type Provider = extern "win64" fn(u32, *const ProviderData) -> HRESULT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -556,7 +556,7 @@ pub fn XAsyncBegin(
 
 /// Queues the provider's `DoWork` on the block's work port.
 pub fn XAsyncSchedule(block: *mut AsyncBlock, delay_ms: u32) -> HRESULT {
-    extern "system" fn work(block: *mut c_void, canceled: bool) {
+    extern "win64" fn work(block: *mut c_void, canceled: bool) {
         let block = block.cast::<AsyncBlock>();
         let Some(call) = call(block) else { return };
         let hr = if canceled {
@@ -582,7 +582,7 @@ pub fn XAsyncSchedule(block: *mut AsyncBlock, delay_ms: u32) -> HRESULT {
 /// Records the result (the first one wins), wakes waiters and queues the
 /// completion routine on the block's completion port.
 pub fn XAsyncComplete(block: *mut AsyncBlock, result: HRESULT, required_size: usize) {
-    extern "system" fn complete(block: *mut c_void, _canceled: bool) {
+    extern "win64" fn complete(block: *mut c_void, _canceled: bool) {
         let block = block.cast::<AsyncBlock>();
         // SAFETY: read before the status was published; see below.
         if let Some(routine) = unsafe { (*block).callback } {
@@ -709,7 +709,7 @@ pub fn finished_with(
     result: Result<Vec<u8>, HRESULT>,
 ) -> HRESULT {
     type Data = Result<Vec<u8>, HRESULT>;
-    extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
+    extern "win64" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
         // SAFETY: the runtime passes valid provider data; the context is the
         // boxed result until cleanup frees it.
         let data = unsafe { &*data };
@@ -761,7 +761,7 @@ pub fn pending_with(
     work: impl FnOnce() -> Result<Vec<u8>, HRESULT> + Send + 'static,
 ) -> HRESULT {
     type Data = Mutex<(Option<Box<dyn FnOnce() -> Result<Vec<u8>, HRESULT> + Send>>, Vec<u8>)>;
-    extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
+    extern "win64" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
         // SAFETY: the runtime passes valid provider data; the context is the
         // boxed state until cleanup frees it.
         let data = unsafe { &*data };
@@ -826,12 +826,12 @@ pub fn bytes<T: Copy>(value: T) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts((&raw const value).cast::<u8>(), size_of::<T>()) }.to_vec()
 }
 
-type Work = extern "system" fn(*mut AsyncBlock) -> HRESULT;
+type Work = extern "win64" fn(*mut AsyncBlock) -> HRESULT;
 
 /// Runs `work` on the block's work port as an async call of its own; its
 /// return value is the call's result.
 pub fn XAsyncRun(block: *mut AsyncBlock, work: Option<Work>) -> HRESULT {
-    extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
+    extern "win64" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
         // SAFETY: the runtime passes valid provider data.
         let data = unsafe { &*data };
         match op {
@@ -866,19 +866,19 @@ pub static OBJECT: Object = Object::new("task queue", &VTABLE);
 pub const INTERFACES: &[Interface] = &[(PROVIDER, PROVIDER, &OBJECT)];
 
 type This = *const Object;
-extern "system" fn m_get_status(_: This, b: *mut AsyncBlock, wait: u8) -> HRESULT {
+extern "win64" fn m_get_status(_: This, b: *mut AsyncBlock, wait: u8) -> HRESULT {
     XAsyncGetStatus(b, wait != 0)
 }
-extern "system" fn m_get_result_size(_: This, b: *mut AsyncBlock, out: *mut usize) -> HRESULT {
+extern "win64" fn m_get_result_size(_: This, b: *mut AsyncBlock, out: *mut usize) -> HRESULT {
     XAsyncGetResultSize(b, out)
 }
-extern "system" fn m_cancel(_: This, b: *mut AsyncBlock) {
+extern "win64" fn m_cancel(_: This, b: *mut AsyncBlock) {
     XAsyncCancel(b)
 }
-extern "system" fn m_run(_: This, b: *mut AsyncBlock, work: Option<Work>) -> HRESULT {
+extern "win64" fn m_run(_: This, b: *mut AsyncBlock, work: Option<Work>) -> HRESULT {
     XAsyncRun(b, work)
 }
-extern "system" fn m_begin(
+extern "win64" fn m_begin(
     _: This,
     b: *mut AsyncBlock,
     context: *mut c_void,
@@ -888,13 +888,13 @@ extern "system" fn m_begin(
 ) -> HRESULT {
     XAsyncBegin(b, context, identity, name, provider)
 }
-extern "system" fn m_schedule(_: This, b: *mut AsyncBlock, delay: u32) -> HRESULT {
+extern "win64" fn m_schedule(_: This, b: *mut AsyncBlock, delay: u32) -> HRESULT {
     XAsyncSchedule(b, delay)
 }
-extern "system" fn m_complete(_: This, b: *mut AsyncBlock, hr: HRESULT, size: usize) {
+extern "win64" fn m_complete(_: This, b: *mut AsyncBlock, hr: HRESULT, size: usize) {
     XAsyncComplete(b, hr, size)
 }
-extern "system" fn m_get_result(
+extern "win64" fn m_get_result(
     _: This,
     b: *mut AsyncBlock,
     identity: *const c_void,
@@ -904,7 +904,7 @@ extern "system" fn m_get_result(
 ) -> HRESULT {
     XAsyncGetResult(b, identity, size, buffer, used)
 }
-extern "system" fn m_create(
+extern "win64" fn m_create(
     _: This,
     work: u32,
     completion: u32,
@@ -912,7 +912,7 @@ extern "system" fn m_create(
 ) -> HRESULT {
     XTaskQueueCreate(work, completion, out)
 }
-extern "system" fn m_create_composite(
+extern "win64" fn m_create_composite(
     _: This,
     work: *const c_void,
     completion: *const c_void,
@@ -920,7 +920,7 @@ extern "system" fn m_create_composite(
 ) -> HRESULT {
     XTaskQueueCreateComposite(work, completion, out)
 }
-extern "system" fn m_get_port(
+extern "win64" fn m_get_port(
     _: This,
     q: *const Queue,
     port: u32,
@@ -928,16 +928,16 @@ extern "system" fn m_get_port(
 ) -> HRESULT {
     XTaskQueueGetPort(q, port, out)
 }
-extern "system" fn m_duplicate(_: This, q: *const Queue, out: *mut *const Queue) -> HRESULT {
+extern "win64" fn m_duplicate(_: This, q: *const Queue, out: *mut *const Queue) -> HRESULT {
     XTaskQueueDuplicateHandle(q, out)
 }
-extern "system" fn m_dispatch(_: This, q: *const Queue, port: u32, timeout: u32) -> bool {
+extern "win64" fn m_dispatch(_: This, q: *const Queue, port: u32, timeout: u32) -> bool {
     XTaskQueueDispatch(q, port, timeout)
 }
-extern "system" fn m_close(_: This, q: *const Queue) {
+extern "win64" fn m_close(_: This, q: *const Queue) {
     XTaskQueueCloseHandle(q)
 }
-extern "system" fn m_submit(
+extern "win64" fn m_submit(
     _: This,
     q: *const Queue,
     port: u32,
@@ -946,7 +946,7 @@ extern "system" fn m_submit(
 ) -> HRESULT {
     XTaskQueueSubmitDelayedCallback(q, port, 0, context, callback)
 }
-extern "system" fn m_submit_delayed(
+extern "win64" fn m_submit_delayed(
     _: This,
     q: *const Queue,
     port: u32,
@@ -956,7 +956,7 @@ extern "system" fn m_submit_delayed(
 ) -> HRESULT {
     XTaskQueueSubmitDelayedCallback(q, port, delay, context, callback)
 }
-extern "system" fn m_terminate(
+extern "win64" fn m_terminate(
     _: This,
     q: *const Queue,
     wait: u8,
@@ -965,7 +965,7 @@ extern "system" fn m_terminate(
 ) -> HRESULT {
     XTaskQueueTerminate(q, wait != 0, context, callback)
 }
-extern "system" fn m_register_monitor(
+extern "win64" fn m_register_monitor(
     _: This,
     q: *const Queue,
     context: *mut c_void,
@@ -974,18 +974,18 @@ extern "system" fn m_register_monitor(
 ) -> HRESULT {
     XTaskQueueRegisterMonitor(q, context, callback, token)
 }
-extern "system" fn m_unregister_monitor(_: This, q: *const Queue, token: u64) {
+extern "win64" fn m_unregister_monitor(_: This, q: *const Queue, token: u64) {
     XTaskQueueUnregisterMonitor(q, token)
 }
-extern "system" fn m_get_process_queue(_: This, out: *mut *const Queue) -> bool {
+extern "win64" fn m_get_process_queue(_: This, out: *mut *const Queue) -> bool {
     XTaskQueueGetCurrentProcessTaskQueue(out)
 }
-extern "system" fn m_set_process_queue(_: This, q: *const Queue) {
+extern "win64" fn m_set_process_queue(_: This, q: *const Queue) {
     XTaskQueueSetCurrentProcessTaskQueue(q)
 }
 /// The runtime's debug check that the caller is not a time-critical thread,
 /// which every runtime call in a title makes first.
-extern "system" fn m_check_thread(_: This) {}
+extern "win64" fn m_check_thread(_: This) {}
 
 static VTABLE: Methods<31> = Methods([
     missing::<0> as *const (),         // 0x00 QueryInterface
@@ -1031,7 +1031,7 @@ mod tests {
     }
 
     static RAN: AtomicU32 = AtomicU32::new(0);
-    extern "system" fn count(context: *mut c_void, canceled: bool) {
+    extern "win64" fn count(context: *mut c_void, canceled: bool) {
         RAN.fetch_add(
             if canceled { 100 } else { context as u32 },
             Ordering::SeqCst,
@@ -1040,10 +1040,10 @@ mod tests {
 
     #[test]
     fn manual_ports_run_callbacks_when_dispatched() {
-        type Create = extern "system" fn(This, u32, u32, *mut *const Queue) -> HRESULT;
-        type Submit = extern "system" fn(This, *const Queue, u32, *mut c_void, Callback) -> HRESULT;
-        type Dispatch = extern "system" fn(This, *const Queue, u32, u32) -> bool;
-        type Close = extern "system" fn(This, *const Queue);
+        type Create = extern "win64" fn(This, u32, u32, *mut *const Queue) -> HRESULT;
+        type Submit = extern "win64" fn(This, *const Queue, u32, *mut c_void, Callback) -> HRESULT;
+        type Dispatch = extern "win64" fn(This, *const Queue, u32, u32) -> bool;
+        type Close = extern "win64" fn(This, *const Queue);
         let this: This = &OBJECT;
         let mut q = std::ptr::null();
         assert_eq!(slot::<Create>(0x60)(this, 0, 0, &mut q), S_OK);
@@ -1063,7 +1063,7 @@ mod tests {
     }
 
     /// A provider that schedules its work and returns a u64 result.
-    extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
+    extern "win64" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
         // SAFETY: the runtime passes valid provider data.
         let data = unsafe { &*data };
         match op {
@@ -1082,7 +1082,7 @@ mod tests {
     }
 
     static COMPLETED: AtomicU32 = AtomicU32::new(0);
-    extern "system" fn completed(_: *mut AsyncBlock) {
+    extern "win64" fn completed(_: *mut AsyncBlock) {
         COMPLETED.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -1137,7 +1137,7 @@ mod tests {
     #[test]
     fn a_nonnegative_completion_still_returns_its_payload() {
         const S_FALSE: HRESULT = 1;
-        extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
+        extern "win64" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
             // SAFETY: the runtime passes valid provider data.
             let data = unsafe { &*data };
             match op {
@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn run_returns_the_work_result() {
-        extern "system" fn work(_: *mut AsyncBlock) -> HRESULT {
+        extern "win64" fn work(_: *mut AsyncBlock) -> HRESULT {
             E_ABORT
         }
         let mut block = AsyncBlock {
@@ -1195,7 +1195,7 @@ mod tests {
             internal: [0; 4],
         };
         assert_eq!(
-            slot::<extern "system" fn(This, *mut AsyncBlock, Option<Work>) -> HRESULT>(0x30)(
+            slot::<extern "win64" fn(This, *mut AsyncBlock, Option<Work>) -> HRESULT>(0x30)(
                 &OBJECT,
                 &mut block,
                 Some(work)
@@ -1209,14 +1209,14 @@ mod tests {
     fn pool_callbacks_may_wait_for_each_other() {
         static SECOND: AtomicBool = AtomicBool::new(false);
         static FIRST: AtomicBool = AtomicBool::new(false);
-        extern "system" fn waits(_: *mut c_void, _: bool) {
+        extern "win64" fn waits(_: *mut c_void, _: bool) {
             let start = std::time::Instant::now();
             while !SECOND.load(Ordering::SeqCst) && start.elapsed().as_secs() < 5 {
                 std::thread::yield_now();
             }
             FIRST.store(SECOND.load(Ordering::SeqCst), Ordering::SeqCst);
         }
-        extern "system" fn releases(_: *mut c_void, _: bool) {
+        extern "win64" fn releases(_: *mut c_void, _: bool) {
             SECOND.store(true, Ordering::SeqCst);
         }
         let mut q = std::ptr::null();
@@ -1244,7 +1244,7 @@ mod tests {
     #[test]
     fn terminate_ends_a_waiting_dispatch() {
         static RAN: AtomicU32 = AtomicU32::new(0);
-        extern "system" fn ran(_: *mut c_void, _: bool) {
+        extern "win64" fn ran(_: *mut c_void, _: bool) {
             RAN.fetch_add(1, Ordering::SeqCst);
         }
         /// Dispatches `queue`'s work until a dispatch returns false, then
@@ -1308,10 +1308,10 @@ mod tests {
     #[test]
     fn terminate_cancels_what_is_queued() {
         static TERMINATED: AtomicBool = AtomicBool::new(false);
-        extern "system" fn terminated(_: *mut c_void) {
+        extern "win64" fn terminated(_: *mut c_void) {
             TERMINATED.store(true, Ordering::SeqCst);
         }
-        extern "system" fn note(context: *mut c_void, canceled: bool) {
+        extern "win64" fn note(context: *mut c_void, canceled: bool) {
             // SAFETY: the test passes a pointer to its flag.
             unsafe { *context.cast::<bool>() = canceled };
         }

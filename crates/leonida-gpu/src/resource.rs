@@ -614,6 +614,7 @@ pub(crate) const SRGB: [(u32, u32); 3] = [(29, 28), (91, 87), (93, 88)];
 /// The format a view of a title texture must name when its host copy is
 /// typeless (see [`DEPTH_FORMATS`], [`SRGB`]): the title's own; `None` if
 /// the host copy is typed.
+#[cfg(windows)]
 pub(crate) fn view_format(this: This) -> Option<u32> {
     // First: a view of no resource (a typed null view) has none.
     let host = host_resource(this)?;
@@ -747,7 +748,7 @@ fn subresource(desc: &ResourceDesc, index: u32) -> Option<(PlacedFootprint, u32,
 /// Device method: where each subresource goes in an upload buffer, rows
 /// 256-byte and subresources 512-byte aligned, as on PC. Unknown sizes give
 /// the documented all-ones values.
-pub(crate) extern "system" fn copyable_footprints(
+pub(crate) extern "win64" fn copyable_footprints(
     _: This,
     desc: *const ResourceDesc,
     first: u32,
@@ -804,7 +805,7 @@ pub(crate) extern "system" fn copyable_footprints(
 /// Device method: the footprint of resources placed one after another.
 /// Returns a 16-byte value, through a hidden first argument. Invalid input
 /// gives the documented size `u64::MAX`.
-pub(crate) extern "system" fn allocation_info(
+pub(crate) extern "win64" fn allocation_info(
     out: *mut AllocationInfo,
     _: This,
     _visible: u32,
@@ -841,7 +842,7 @@ pub(crate) struct AllocationInfo1 {
 
 /// Device method 0x360 (`ID3D12Device8`): [`allocation_info`] for newer
 /// descriptions, also telling where each resource goes.
-pub(crate) extern "system" fn allocation_info2(
+pub(crate) extern "win64" fn allocation_info2(
     out: *mut AllocationInfo,
     _: This,
     _visible: u32,
@@ -917,8 +918,8 @@ pub(crate) struct Memory {
     attributes: Option<u64>,
 }
 
-pub type AllocRoutine = extern "system" fn(usize, u64) -> *mut c_void;
-pub type FreeRoutine = extern "system" fn(*mut c_void, u64);
+pub type AllocRoutine = extern "win64" fn(usize, u64) -> *mut c_void;
+pub type FreeRoutine = extern "win64" fn(*mut c_void, u64);
 static ALLOCATOR: std::sync::OnceLock<(AllocRoutine, FreeRoutine)> = std::sync::OnceLock::new();
 
 /// Committed resources get their memory from the title's general
@@ -1030,7 +1031,7 @@ struct Heap {
     memory: Memory,
 }
 
-pub(crate) extern "system" fn create_heap(
+pub(crate) extern "win64" fn create_heap(
     _: This,
     desc: *const HeapDesc,
     iid: *const Iid,
@@ -1065,13 +1066,13 @@ pub(crate) extern "system" fn create_heap(
     object::hand_out(HEAP, heap, iid, &HEAP_IIDS, out)
 }
 
-extern "system" fn heap_query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
+extern "win64" fn heap_query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
     object::answer(HEAP, iid, object::is(iid, &HEAP_IIDS).then_some(this), out)
 }
-extern "system" fn heap_release(this: This) -> u32 {
+extern "win64" fn heap_release(this: This) -> u32 {
     object::release_boxed::<Heap>(this)
 }
-extern "system" fn heap_desc(this: This, out: *mut HeapDesc) {
+extern "win64" fn heap_desc(this: This, out: *mut HeapDesc) {
     if !out.is_null() {
         // SAFETY: `this` is a heap; the title passes room for a description.
         unsafe { out.write((*this.cast::<Heap>()).desc) };
@@ -2400,7 +2401,7 @@ impl Drop for Resource {
     }
 }
 
-pub(crate) extern "system" fn create_committed(
+pub(crate) extern "win64" fn create_committed(
     _: This,
     heap: *const HeapProperties,
     heap_flags: u32,
@@ -2447,7 +2448,7 @@ pub(crate) extern "system" fn create_committed(
 /// session, castable format count, castable formats, iid, out)`. The host
 /// copy starts in the common state, as layouts are not tracked.
 #[allow(clippy::too_many_arguments)] // the method's own arguments
-pub(crate) extern "system" fn create_committed3(
+pub(crate) extern "win64" fn create_committed3(
     this: This,
     heap: *const HeapProperties,
     heap_flags: u32,
@@ -2474,7 +2475,7 @@ fn page_pools() -> std::sync::MutexGuard<'static, Vec<Option<(u64, u32)>>> {
 }
 
 /// Device method 0x250: `(address, page count, handle out)`.
-pub(crate) extern "system" fn register_page_pool(
+pub(crate) extern "win64" fn register_page_pool(
     _: This,
     address: u64,
     pages: u32,
@@ -2492,7 +2493,7 @@ pub(crate) extern "system" fn register_page_pool(
 }
 
 /// Device method 0x258.
-pub(crate) extern "system" fn unregister_page_pool(_: This, handle: usize) -> HRESULT {
+pub(crate) extern "win64" fn unregister_page_pool(_: This, handle: usize) -> HRESULT {
     match page_pools().get_mut(handle.wrapping_sub(1)) {
         Some(pool @ Some(_)) => {
             *pool = None;
@@ -2509,7 +2510,7 @@ pub(crate) extern "system" fn unregister_page_pool(_: This, handle: usize) -> HR
 /// enhanced barriers. GPU addresses are CPU addresses, so the resource is
 /// a view of that memory. `D3D12_RESOURCE_DESC1` starts like the plain
 /// description; its sampler feedback region is not needed.
-pub(crate) extern "system" fn create_at_address(
+pub(crate) extern "win64" fn create_at_address(
     _: This,
     address: u64,
     desc: *const ResourceDesc,
@@ -2706,7 +2707,7 @@ pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
     Some(out)
 }
 
-pub(crate) extern "system" fn create_placed(
+pub(crate) extern "win64" fn create_placed(
     _: This,
     heap: This,
     offset: u64,
@@ -2754,7 +2755,7 @@ pub(crate) extern "system" fn create_placed(
     )
 }
 
-extern "system" fn resource_query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
+extern "win64" fn resource_query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
     object::answer(
         RESOURCE,
         iid,
@@ -2762,20 +2763,20 @@ extern "system" fn resource_query(this: This, iid: *const Iid, out: *mut This) -
         out,
     )
 }
-extern "system" fn resource_release(this: This) -> u32 {
+extern "win64" fn resource_release(this: This) -> u32 {
     object::release_boxed::<Resource>(this)
 }
 /// Memory is always mapped (subresources are not told apart yet); a null
 /// `out` only asks for residency.
-extern "system" fn map(this: This, _sub: u32, _read: *const c_void, out: *mut *mut u8) -> HRESULT {
+extern "win64" fn map(this: This, _sub: u32, _read: *const c_void, out: *mut *mut u8) -> HRESULT {
     if !out.is_null() {
         // SAFETY: checked non-null; the title passes room for a pointer.
         unsafe { out.write(resource(this).data()) };
     }
     S_OK
 }
-extern "system" fn unmap(_: This, _sub: u32, _written: *const c_void) {}
-extern "system" fn resource_desc(this: This, out: *mut ResourceDesc) {
+extern "win64" fn unmap(_: This, _sub: u32, _written: *const c_void) {}
+extern "win64" fn resource_desc(this: This, out: *mut ResourceDesc) {
     if !out.is_null() {
         // SAFETY: checked non-null; the title passes room for a description.
         unsafe { out.write(resource(this).desc) };
@@ -2786,7 +2787,7 @@ extern "system" fn resource_desc(this: This, out: *mut ResourceDesc) {
 /// Memory is unified and cache-coherent (as the architecture query says),
 /// so every type is in pool L0, default heaps are not CPU-visible and the
 /// others are write-back.
-pub(crate) extern "system" fn custom_heap_properties(
+pub(crate) extern "win64" fn custom_heap_properties(
     out: *mut HeapProperties,
     _: This,
     nodes: u32,
@@ -2816,7 +2817,7 @@ pub(crate) extern "system" fn custom_heap_properties(
     out
 }
 
-extern "system" fn gpu_address(this: This) -> u64 {
+extern "win64" fn gpu_address(this: This) -> u64 {
     let r = resource(this);
     let at = r.data() as u64;
     // The console's GPU addresses fit in 40 bits; its ray-tracing builder
@@ -2835,7 +2836,7 @@ extern "system" fn gpu_address(this: This) -> u64 {
     }
     at
 }
-extern "system" fn heap_properties(
+extern "win64" fn heap_properties(
     this: This,
     properties: *mut HeapProperties,
     flags: *mut u32,
@@ -2883,9 +2884,9 @@ mod tests {
     use super::*;
     use crate::object::slot;
 
-    type Release = extern "system" fn(This) -> u32;
-    type Map = extern "system" fn(This, u32, *const c_void, *mut *mut u8) -> HRESULT;
-    type Address = extern "system" fn(This) -> u64;
+    type Release = extern "win64" fn(This) -> u32;
+    type Map = extern "win64" fn(This, u32, *const c_void, *mut *mut u8) -> HRESULT;
+    type Address = extern "win64" fn(This) -> u64;
 
     const PROPERTIES: HeapProperties = HeapProperties {
         kind: 1,
@@ -2945,7 +2946,7 @@ mod tests {
         let memory = unsafe { &(*heap.cast::<Heap>()).memory };
         assert_eq!(memory.ptr.as_ptr() as u64 % KIB_64, 0);
         let mut back = std::mem::MaybeUninit::<HeapDesc>::uninit();
-        slot::<extern "system" fn(This, *mut HeapDesc)>(heap, 0x40)(heap, back.as_mut_ptr());
+        slot::<extern "win64" fn(This, *mut HeapDesc)>(heap, 0x40)(heap, back.as_mut_ptr());
         // SAFETY: written above.
         assert_eq!(unsafe { back.assume_init() }.size, 1 << 20);
         assert_eq!(slot::<Release>(heap, 0x10)(heap), 0);
@@ -2969,7 +2970,7 @@ mod tests {
         // GetCustomHeapProperties (0xd0): the struct comes back through the
         // hidden first argument, which is also returned.
         type Custom =
-            extern "system" fn(*mut HeapProperties, This, u32, u32) -> *mut HeapProperties;
+            extern "win64" fn(*mut HeapProperties, This, u32, u32) -> *mut HeapProperties;
         let mut p = PROPERTIES;
         let back = slot::<Custom>(device, 0xd0)(&mut p, device, 1, 2);
         assert_eq!(back, &raw mut p);
@@ -2988,7 +2989,7 @@ mod tests {
         assert_eq!(p.cpu_pages, 1, "default: not CPU-visible");
 
         // 0x428: a buffer over memory the title owns, as the title asks.
-        type At = extern "system" fn(
+        type At = extern "win64" fn(
             This,
             u64,
             *const ResourceDesc,
@@ -3219,10 +3220,10 @@ mod tests {
             footprint: rows,
         };
         type Copy =
-            extern "system" fn(This, *const Location, u32, u32, u32, *const Location, *const u8);
+            extern "win64" fn(This, *const Location, u32, u32, u32, *const Location, *const u8);
         slot::<Copy>(list, 0x80)(list, &to, 0, 0, 0, &from, null.cast());
-        slot::<extern "system" fn(This) -> HRESULT>(list, 0x48)(list);
-        slot::<extern "system" fn(This, u32, *const This)>(queue, 0x50)(queue, 1, &list);
+        slot::<extern "win64" fn(This) -> HRESULT>(list, 0x48)(list);
+        slot::<extern "win64" fn(This, u32, *const This)>(queue, 0x50)(queue, 1, &list);
 
         // Read the host texture back into a readback buffer.
         let readback_heap = D3D12_HEAP_PROPERTIES {

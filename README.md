@@ -180,6 +180,38 @@ to Wine. Only run game files you trust.
 [flatpak-sockets]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html
 [vkd3d-proton]: https://github.com/HansKristian-Work/vkd3d-proton/actions/workflows/artifacts.yml
 
+### Experimental: macOS on Apple Silicon (no picture yet)
+
+Leonida Legacy can load the game on a Mac and start its code under Rosetta 2, but **it cannot show
+a picture yet**: there is no Metal back end, so the game stops at its first graphics call. This is
+for people who want to help with the port, not for playing. What works and what is missing is in
+`docs/notes/` (the files with `macos` in their name).
+
+1. Install the Xcode command line tools, Rosetta 2 and Rust. In Terminal:
+
+   ```bash
+   xcode-select --install
+   softwareupdate --install-rosetta --agree-to-license
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+2. In the Leonida Legacy folder, build the Mac version:
+
+   ```bash
+   rustup target add x86_64-apple-darwin x86_64-pc-windows-msvc
+   cargo build --release -p leonida --target x86_64-apple-darwin
+   ```
+
+3. Check what the game still needs, without running it (replace the path with the game's `.exe` in
+   your own copy of the **Xbox Series** game; a PlayStation copy does not work):
+
+   ```bash
+   ./target/x86_64-apple-darwin/release/leonida run "/path/to/your/game/folder/the-game.exe"
+   ```
+
+   It lists every `missing` import. Add `--execute` to start the game; it stops at the first
+   missing one and says which.
+
 ### Graphics settings
 
 The measured base profile is automatic. Experimental profiles such as `card-windows` remain opt-in.
