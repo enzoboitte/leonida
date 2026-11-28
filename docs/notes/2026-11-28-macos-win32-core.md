@@ -139,3 +139,9 @@ its preferred base (so its relocations applied), 134 imports bound to us, 22 bet
 that copy, so the game itself was not started.
 
 7 more tests (work items, timers, waits; strings; messages and local blocks).
+
+Then `SetFileTime` (access and write times; `shortcut:` not the creation time), `CopyFile2`,
+`CreateHardLinkW`, `CreateSymbolicLinkW`, `GetModuleHandleExW` (by name or by address) and
+`DuplicateHandle` (files get a second host descriptor, pseudo handles stay themselves;
+`shortcut:` other objects cannot be duplicated yet). Census over the game's DLLs: 272 of 625;
+`msvcp140.dll` and its two vcruntime DLLs now miss only the C runtime's functions.

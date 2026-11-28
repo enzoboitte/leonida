@@ -49,6 +49,26 @@ pub extern "win64" fn RtlPcToFileHeader(pc: usize, base: *mut usize) -> usize {
 
 /// shortcut: no frames are given (telemetry and asserts take it as an
 /// unknown stack); walk the title's frames with `unwind` if one needs them.
+/// A module by name, or (`GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS`) the one an
+/// address lies in. Title images are never unloaded, so pinning changes nothing.
+#[allow(non_snake_case)]
+pub extern "win64" fn GetModuleHandleExW(flags: u32, name: *const u16, out: *mut usize) -> i32 {
+    const FROM_ADDRESS: u32 = 4;
+    let module = if flags & FROM_ADDRESS != 0 {
+        leonida_loader::image_base(name as usize).unwrap_or(0)
+    } else {
+        crate::modules::kernel::GetModuleHandleW(name) as usize
+    };
+    if !out.is_null() {
+        // SAFETY: the title's out pointer.
+        unsafe { *out = module };
+    }
+    if module == 0 {
+        set_last_error(126); // ERROR_MOD_NOT_FOUND
+    }
+    (module != 0).into()
+}
+
 #[allow(non_snake_case)]
 pub extern "win64" fn RtlCaptureStackBackTrace(
     _: u32,
