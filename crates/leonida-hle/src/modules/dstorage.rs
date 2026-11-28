@@ -20,7 +20,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::{CStr, c_char, c_void};
+#[cfg(not(windows))]
+use std::os::unix::fs::FileExt;
+#[cfg(windows)]
 use std::os::windows::fs::FileExt;
+#[cfg(windows)]
 use std::os::windows::io::FromRawHandle;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
@@ -129,7 +133,10 @@ extern "win64" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out:
         std::ptr::null(),
         OPEN_EXISTING,
         0,
+        #[cfg(windows)]
         std::ptr::null_mut(),
+        #[cfg(not(windows))]
+        0,
     );
     // SAFETY: the title passes a NUL-terminated path.
     let name = unsafe {
@@ -144,7 +151,12 @@ extern "win64" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out:
     let kept = name.clone();
     tracing::info!(path = name, iid = iid_text(iid), "dstorage: file opened");
     // SAFETY: a handle we just opened and nobody else owns.
+    #[cfg(windows)]
     let file = unsafe { std::fs::File::from_raw_handle(handle) };
+    #[cfg(not(windows))]
+    let Some(file) = super::files::take_file(handle) else {
+        return from_win32(&std::io::Error::from_raw_os_error(9));
+    };
     let file = Instance::create(Object::new("dstorage file", &FILE_VTABLE), File { file });
     WALLS_FILES.lock().unwrap_or_else(|e| e.into_inner()).push((file as usize, kept));
     put(out, file)
@@ -1100,7 +1112,11 @@ fn read_into(request: &Request, out: &mut [u8]) -> Result<(), HRESULT> {
         if done == out.len() {
             break Ok(());
         }
-        match file.seek_read(&mut out[done..], request.offset + done as u64) {
+        #[cfg(windows)]
+        let read = file.seek_read(&mut out[done..], request.offset + done as u64);
+        #[cfg(not(windows))]
+        let read = file.read_at(&mut out[done..], request.offset + done as u64);
+        match read {
             Ok(0) => break Err(END_OF_FILE),
             Ok(n) => done += n,
             Err(error) => break Err(from_win32(&error)),
@@ -1125,6 +1141,7 @@ fn into_destination(
         // there changes. `fill` writes from user mode (a file read is read
         // beside first, see `execute`), so a block guarded again meanwhile
         // faults into the guard instead of failing the write.
+        #[cfg(windows)]
         leonida_gpu::kernel_will_write(request.destination as usize, len);
         // SAFETY: the title's destination holds `destination_size` bytes, at
         // least `len`, and nothing else writes it until completion.
@@ -1135,6 +1152,7 @@ fn into_destination(
         // end): a copy or a texture pass that took the memory while the
         // read was under way took what was there before. Counted; acted on
         // only with `LEONIDA_PAGE_WRITES=all`.
+        #[cfg(windows)]
         leonida_gpu::title_memory_written(request.destination as usize, len, false);
         return filled;
     }
@@ -1250,6 +1268,7 @@ pub(crate) fn module() -> HleModule {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use std::os::windows::ffi::OsStrExt;
     use std::time::{Duration, Instant};
 
@@ -1268,7 +1287,15 @@ mod tests {
     }
 
     fn open(path: &std::path::Path) -> *mut c_void {
+        #[cfg(windows)]
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        // Off Windows a title path is on a virtual drive: the file's folder gets one.
+        #[cfg(not(windows))]
+        let wide: Vec<u16> = {
+            let letter = crate::modules::files::mount(path.parent().unwrap()).unwrap();
+            let name = path.file_name().unwrap().to_string_lossy();
+            format!("{letter}:\\{name}").encode_utf16().chain([0]).collect()
+        };
         let open: extern "win64" fn(*mut c_void, *const u16, *const Guid, Out) -> HRESULT =
             call(factory(), 0x20);
         let mut file = std::ptr::null_mut();

@@ -15,6 +15,9 @@ const MEM_COMMIT: u32 = 0x1000;
 const MEM_RESERVE: u32 = 0x2000;
 const MEM_DECOMMIT: u32 = 0x4000;
 const MEM_RELEASE: u32 = 0x8000;
+const MEM_COALESCE_PLACEHOLDERS: u32 = 0x1;
+const MEM_PRESERVE_PLACEHOLDER: u32 = 0x2;
+const MEM_REPLACE_PLACEHOLDER: u32 = 0x4000;
 const MEM_FREE: u32 = 0x1_0000;
 const MEM_PRIVATE: u32 = 0x2_0000;
 const MEM_RESET: u32 = 0x8_0000;
@@ -212,7 +215,9 @@ pub extern "win64" fn VirtualAlloc(
     let _ = (MEM_TOP_DOWN, MEM_LARGE_PAGES);
     let mut map = reservations();
     let wanted = address as usize;
-    let (base, start, len) = if kind & MEM_RESERVE != 0 {
+    // Replacing a placeholder works inside the reservation it is.
+    let new_reservation = kind & MEM_RESERVE != 0 && kind & MEM_REPLACE_PLACEHOLDER == 0;
+    let (base, start, len) = if new_reservation {
         let at = wanted & !(GRANULARITY - 1);
         let len = (wanted + size).next_multiple_of(PAGE) - at;
         let Some(base) = reserve(at, len) else {
@@ -258,13 +263,78 @@ pub extern "win64" fn VirtualAlloc(
         // SAFETY: committed pages of ours whose contents the title gives up.
         unsafe { libc::madvise(start as *mut _, len, libc::MADV_FREE) };
     }
-    if kind & MEM_RESERVE != 0 { base } else { start }.max(wanted) as *mut c_void
+    if new_reservation { base } else { start }.max(wanted) as *mut c_void
 }
 
 #[allow(non_snake_case)]
 pub extern "win64" fn VirtualFree(address: *mut c_void, size: usize, kind: u32) -> i32 {
+    let r = virtual_free(address, size, kind);
+    if r == 0 {
+        tracing::warn!(
+            address = format_args!("{address:p}"),
+            size,
+            kind = format_args!("{kind:#x}"),
+            "VirtualFree failed"
+        );
+    }
+    r
+}
+
+fn virtual_free(address: *mut c_void, size: usize, kind: u32) -> i32 {
     let at = address as usize;
     let mut map = reservations();
+    // Placeholders (Windows 10's `VirtualAlloc2` reservations): releasing
+    // with MEM_PRESERVE_PLACEHOLDER splits `at..at + size` off as its own
+    // reservation; with MEM_COALESCE_PLACEHOLDERS the reservations inside it
+    // become one. Nothing is freed either way.
+    if kind & MEM_RELEASE != 0 && kind & (MEM_PRESERVE_PLACEHOLDER | MEM_COALESCE_PLACEHOLDERS) != 0
+    {
+        let Some((base, r)) = holding(&mut map, at) else {
+            set_last_error(ERROR_INVALID_ADDRESS);
+            return 0;
+        };
+        let end = at + size;
+        if kind & MEM_PRESERVE_PLACEHOLDER != 0 {
+            if size == 0 || end > base + r.size {
+                set_last_error(ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+            let r = map.remove(&base).expect("found above");
+            let page = |a: usize| (a - base) / PAGE;
+            for (from, to) in [(base, at), (at, end), (end, base + r.size)] {
+                if to > from {
+                    let pages = r.pages[page(from)..page(to)].to_vec();
+                    map.insert(
+                        from,
+                        Reservation {
+                            size: to - from,
+                            pages,
+                            initial: r.initial,
+                        },
+                    );
+                }
+            }
+            return 1;
+        }
+        // Coalesce: the reservations from `base` to `end` become one.
+        let inside: Vec<usize> = map.range(base..end).map(|(&b, _)| b).collect();
+        let mut pages = Vec::new();
+        let mut initial = 0;
+        for b in inside {
+            let r = map.remove(&b).expect("listed above");
+            initial = r.initial;
+            pages.extend(r.pages);
+        }
+        map.insert(
+            base,
+            Reservation {
+                size: pages.len() * PAGE,
+                pages,
+                initial,
+            },
+        );
+        return 1;
+    }
     if kind & MEM_RELEASE != 0 {
         // Releases a whole reservation, given by its base, with size 0.
         if size != 0 || !map.contains_key(&at) {
@@ -584,6 +654,54 @@ mod tests {
             "release takes size 0"
         );
         assert_eq!(VirtualFree(base, 0, MEM_RELEASE), 1);
+    }
+
+    #[test]
+    fn placeholders_split_and_coalesce() {
+        let base = VirtualAlloc(
+            std::ptr::null_mut(),
+            3 * GRANULARITY,
+            MEM_RESERVE,
+            PAGE_NOACCESS,
+        ) as usize;
+        let middle = (base + GRANULARITY) as *mut c_void;
+        assert_eq!(
+            VirtualFree(middle, GRANULARITY, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER),
+            1
+        );
+        let mut info = std::mem::MaybeUninit::<BasicInformation>::uninit();
+        VirtualQuery(middle, info.as_mut_ptr(), size_of::<BasicInformation>());
+        // SAFETY: filled in above.
+        assert_eq!(
+            unsafe { info.assume_init_ref() }.allocation_base,
+            middle as usize,
+            "its own now"
+        );
+        let replaced = VirtualAlloc(
+            middle,
+            GRANULARITY,
+            MEM_RESERVE | MEM_COMMIT | MEM_REPLACE_PLACEHOLDER,
+            PAGE_READWRITE,
+        );
+        assert_eq!(replaced, middle);
+        // SAFETY: committed above.
+        unsafe { *(middle as *mut u8) = 1 };
+        assert_eq!(
+            VirtualFree(
+                base as *mut c_void,
+                3 * GRANULARITY,
+                MEM_RELEASE | MEM_COALESCE_PLACEHOLDERS
+            ),
+            1
+        );
+        VirtualQuery(middle, info.as_mut_ptr(), size_of::<BasicInformation>());
+        // SAFETY: filled in above.
+        assert_eq!(
+            unsafe { info.assume_init_ref() }.allocation_base,
+            base,
+            "one again"
+        );
+        assert_eq!(VirtualFree(base as *mut c_void, 0, MEM_RELEASE), 1);
     }
 
     #[test]

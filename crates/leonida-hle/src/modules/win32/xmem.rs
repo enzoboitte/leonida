@@ -68,7 +68,7 @@ pub extern "win64" fn XMemVirtualAlloc(
     if placeholder && kind & MEM_REPLACE_PLACEHOLDER != 0 {
         return base;
     }
-    let kind = kind & !(PAGES_2M | PAGES_64K_BIT | MEM_REPLACE_PLACEHOLDER);
+    let kind = kind & !(PAGES_2M | PAGES_64K_BIT);
     if !base.is_null() {
         return memory::VirtualAlloc(base, size, kind, protect);
     }
@@ -378,6 +378,103 @@ pub extern "win64" fn XMemFreePhysicalPages(n: usize, pages: *const usize) -> i3
     }
     1
 }
+
+/// The slices behind `pages`, or `None` if one is unknown.
+fn slices(pages: &[usize]) -> Option<Vec<Slice>> {
+    let catalog = catalog();
+    pages
+        .iter()
+        .map(|p| catalog.pages.get(p).cloned())
+        .collect()
+}
+
+/// Whether every page holding `offset..offset + len` is known.
+pub(crate) fn pages_known(pages: &[usize], offset: usize, len: usize) -> bool {
+    let n = (offset + len).div_ceil(PAGE).min(pages.len());
+    slices(&pages[..n]).is_some()
+}
+
+/// A view of our own over consecutive pages of one section, unmapped when
+/// dropped: DirectStorage writes its destinations through it.
+pub(crate) struct PageWindow {
+    at: usize,
+    map_len: usize,
+    from: usize,
+    len: usize,
+}
+
+impl PageWindow {
+    pub(crate) fn bytes(&mut self) -> &mut [u8] {
+        // SAFETY: the view holds `from + len` read-write bytes, ours until dropped.
+        unsafe { std::slice::from_raw_parts_mut((self.at + self.from) as *mut u8, self.len) }
+    }
+}
+
+impl Drop for PageWindow {
+    fn drop(&mut self) {
+        // SAFETY: the view made in `page_window`.
+        unsafe { libc::munmap(self.at as *mut _, self.map_len) };
+    }
+}
+
+/// One view over `offset..offset + len` of `pages`, if they are consecutive
+/// pages of one section.
+pub(crate) fn page_window(pages: &[usize], offset: usize, len: usize) -> Option<PageWindow> {
+    let n = (offset + len).div_ceil(PAGE);
+    let s = slices(pages.get(..n)?)?;
+    let first = s.first()?;
+    let consecutive = s
+        .iter()
+        .enumerate()
+        .all(|(k, x)| Arc::ptr_eq(&x.section, &first.section) && x.index == first.index + k);
+    if !consecutive {
+        return None;
+    }
+    let map_len = n * PAGE;
+    let prot = libc::PROT_READ | libc::PROT_WRITE;
+    // SAFETY: a fresh shared view of the section's pages.
+    let at = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            map_len,
+            prot,
+            libc::MAP_SHARED,
+            first.section.0,
+            (first.index * PAGE) as i64,
+        )
+    };
+    (at != libc::MAP_FAILED).then(|| PageWindow {
+        at: at as usize,
+        map_len,
+        from: offset,
+        len,
+    })
+}
+
+/// Writes `data` into `pages` from `offset`, page by page; whether all of
+/// it was written.
+pub(crate) fn write_physical(pages: &[usize], offset: usize, data: &[u8]) -> bool {
+    let n = (offset + data.len()).div_ceil(PAGE);
+    let Some(s) = pages.get(..n).and_then(slices) else {
+        return false;
+    };
+    let mut done = 0;
+    for (k, slice) in s.iter().enumerate() {
+        let start = if k == 0 { offset } else { 0 };
+        let take = (PAGE - start).min(data.len() - done);
+        let Some(mut w) = page_window(&pages[k..=k], start, take) else {
+            return false;
+        };
+        let _ = slice;
+        w.bytes().copy_from_slice(&data[done..done + take]);
+        done += take;
+    }
+    done == data.len()
+}
+
+/// What the GPU side is told of pages written; it has nothing to learn
+/// on macOS yet.
+pub(crate) fn pages_written(_pages: &[usize], _offset: usize, _len: usize) {}
 
 /// Shows `slice` at `at`, or nothing (no access) when `None`.
 fn show(at: usize, slice: Option<&Slice>) -> bool {

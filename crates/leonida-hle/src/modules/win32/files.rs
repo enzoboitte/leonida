@@ -256,6 +256,17 @@ fn descriptor(handle: usize) -> Option<(i32, bool)> {
     }
 }
 
+/// The host file behind a file handle, taken from it (the handle is gone):
+/// for our own readers (DirectStorage).
+pub(crate) fn take_file(handle: usize) -> Option<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    match table().objects_remove(handle) {
+        // SAFETY: the descriptor this handle owned, now owned by the File.
+        Some(Object::File { fd, .. }) => Some(unsafe { std::fs::File::from_raw_fd(fd) }),
+        _ => None,
+    }
+}
+
 /// Closes what a file handle holds (called as its handle is closed).
 pub(super) fn closed(fd: i32, delete: Option<PathBuf>) {
     // SAFETY: the descriptor this handle owned, closed once.

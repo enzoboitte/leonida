@@ -10,12 +10,16 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref, clippy::too_many_arguments)]
 
 mod com;
+pub mod crt;
 pub mod files;
+mod format;
+mod libc_crt;
 mod memory;
 mod misc;
 pub mod more;
 pub mod net;
 mod pool;
+mod stdio;
 mod sync;
 mod system;
 mod thread;
