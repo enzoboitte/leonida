@@ -21,7 +21,7 @@ struct Owned {
 }
 impl Drop for Owned {
     fn drop(&mut self) {
-        object::slot::<extern "system" fn(This) -> u32>(self.heap, 0x10)(self.heap);
+        object::slot::<extern "win64" fn(This) -> u32>(self.heap, 0x10)(self.heap);
         // SAFETY: heap released; these tests never submit any native work.
         unsafe { VirtualFree(self.memory, 0, MEM_RELEASE) };
     }

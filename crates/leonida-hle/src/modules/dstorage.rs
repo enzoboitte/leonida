@@ -49,7 +49,7 @@ type Out = *mut *mut c_void;
 
 static FACTORY_OBJECT: Object = Object::new("dstorage factory", &FACTORY_VTABLE);
 
-pub extern "system" fn DStorageGetFactory(iid: *const Guid, out: Out) -> HRESULT {
+pub extern "win64" fn DStorageGetFactory(iid: *const Guid, out: Out) -> HRESULT {
     // SAFETY: the title passes a GUID (null tolerated).
     match unsafe { iid.as_ref() } {
         Some(&iid) if iid == FACTORY => {
@@ -82,12 +82,12 @@ impl<T> Instance<T> {
     }
 }
 
-extern "system" fn add_ref_instance<T>(this: *const Instance<T>) -> u32 {
+extern "win64" fn add_ref_instance<T>(this: *const Instance<T>) -> u32 {
     // SAFETY: an instance we created and the title still holds.
     unsafe { &*this }.refs.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-extern "system" fn release<T>(this: *mut Instance<T>) -> u32 {
+extern "win64" fn release<T>(this: *mut Instance<T>) -> u32 {
     // SAFETY: as above.
     let left = unsafe { &*this }.refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
@@ -114,7 +114,7 @@ fn from_win32(error: &std::io::Error) -> HRESULT {
 type Factory = *const Object;
 
 /// Opens `path` for reading; the file object owns the handle.
-extern "system" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out: Out) -> HRESULT {
+extern "win64" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out: Out) -> HRESULT {
     const GENERIC_READ: u32 = 0x8000_0000;
     const FILE_SHARE_READ: u32 = 1;
     const OPEN_EXISTING: u32 = 3;
@@ -151,7 +151,7 @@ extern "system" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out
 }
 
 /// `(capacity, name, iid, out)`.
-extern "system" fn create_status_array(
+extern "win64" fn create_status_array(
     _: Factory,
     capacity: u32,
     name: *const c_char,
@@ -183,7 +183,7 @@ struct QueueDesc {
     unknown: u64,
 }
 
-extern "system" fn create_queue(
+extern "win64" fn create_queue(
     _: Factory,
     desc: *const QueueDesc,
     iid: *const Guid,
@@ -219,7 +219,7 @@ extern "system" fn create_queue(
 }
 
 /// The title asks for 32 MiB and stops if this fails.
-extern "system" fn set_staging_buffer_size(_: Factory, size: u32) -> HRESULT {
+extern "win64" fn set_staging_buffer_size(_: Factory, size: u32) -> HRESULT {
     tracing::info!(size, "dstorage: staging buffer size");
     if let Some(scheduler) = scheduler() {
         scheduler.lock().staging = u64::from(size);
@@ -283,7 +283,7 @@ type Array = *mut Instance<StatusArray>;
 
 /// The result of the requests before entry `index`: pending, the first
 /// failure, or success.
-extern "system" fn status_result(this: Array, index: u32) -> HRESULT {
+extern "win64" fn status_result(this: Array, index: u32) -> HRESULT {
     // SAFETY: an array we created and the title still holds.
     let entries = &unsafe { &*this }.state.entries;
     entries
@@ -293,7 +293,7 @@ extern "system" fn status_result(this: Array, index: u32) -> HRESULT {
 
 /// The title polls this (entry 0, a `Sleep(1)` loop) and never
 /// reads the result itself.
-extern "system" fn is_complete(this: Array, index: u32) -> bool {
+extern "win64" fn is_complete(this: Array, index: u32) -> bool {
     status_result(this, index) != E_PENDING
 }
 
@@ -807,7 +807,7 @@ impl Status {
     }
 }
 
-extern "system" fn enqueue_request(this: QueueRef, request: *const Request) {
+extern "win64" fn enqueue_request(this: QueueRef, request: *const Request) {
     // SAFETY: the title passes its request (null tolerated).
     let Some(&request) = (unsafe { request.as_ref() }) else {
         return;
@@ -815,7 +815,7 @@ extern "system" fn enqueue_request(this: QueueRef, request: *const Request) {
     queue(this, Command::Read(request));
 }
 
-extern "system" fn enqueue_status(this: QueueRef, array: Array, index: u32) {
+extern "win64" fn enqueue_status(this: QueueRef, array: Array, index: u32) {
     // SAFETY: the title passes an array we created (null tolerated).
     let Some(entries) = (unsafe { array.as_ref() }).map(|a| &a.state.entries) else {
         return;
@@ -882,7 +882,7 @@ fn queue(this: QueueRef, command: Command) {
     }
 }
 
-extern "system" fn submit(this: QueueRef) {
+extern "win64" fn submit(this: QueueRef) {
     // SAFETY: as above.
     let id = unsafe { &*this }.state.id;
     let Some(scheduler) = scheduler() else {
@@ -898,7 +898,7 @@ extern "system" fn submit(this: QueueRef) {
 /// Ends the queue whatever its reference count: what was not started never
 /// completes, and this returns once the reads already running have
 /// finished. The title calls this, not `Release`.
-extern "system" fn close(this: QueueRef) {
+extern "win64" fn close(this: QueueRef) {
     // SAFETY: as above.
     close_lane(unsafe { &*this }.state.id);
 }
@@ -1269,7 +1269,7 @@ mod tests {
 
     fn open(path: &std::path::Path) -> *mut c_void {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-        let open: extern "system" fn(*mut c_void, *const u16, *const Guid, Out) -> HRESULT =
+        let open: extern "win64" fn(*mut c_void, *const u16, *const Guid, Out) -> HRESULT =
             call(factory(), 0x20);
         let mut file = std::ptr::null_mut();
         assert_eq!(
@@ -1280,7 +1280,7 @@ mod tests {
     }
 
     fn status_array(capacity: u32) -> *mut c_void {
-        let create: extern "system" fn(
+        let create: extern "win64" fn(
             *mut c_void,
             u32,
             *const c_char,
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     fn new_queue(source_type: u64) -> *mut c_void {
-        let create: extern "system" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
+        let create: extern "win64" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
             call(factory(), 0x50);
         let desc = QueueDesc {
             source_type,
@@ -1334,28 +1334,28 @@ mod tests {
     }
 
     fn enqueue(queue: *mut c_void, request: &Request) {
-        let f: extern "system" fn(*mut c_void, *const Request) = call(queue, 0x18);
+        let f: extern "win64" fn(*mut c_void, *const Request) = call(queue, 0x18);
         f(queue, request);
     }
 
     fn enqueue_status(queue: *mut c_void, array: *mut c_void, index: u32) {
-        let f: extern "system" fn(*mut c_void, *mut c_void, u32) = call(queue, 0x20);
+        let f: extern "win64" fn(*mut c_void, *mut c_void, u32) = call(queue, 0x20);
         f(queue, array, index);
     }
 
     fn void(object: *mut c_void, slot: usize) {
-        let f: extern "system" fn(*mut c_void) = call(object, slot);
+        let f: extern "win64" fn(*mut c_void) = call(object, slot);
         f(object);
     }
 
     fn result(array: *mut c_void, index: u32) -> HRESULT {
-        let f: extern "system" fn(*mut c_void, u32) -> HRESULT = call(array, 0x20);
+        let f: extern "win64" fn(*mut c_void, u32) -> HRESULT = call(array, 0x20);
         f(array, index)
     }
 
     /// Polls as the title does, then returns the entry's result.
     fn wait(array: *mut c_void, index: u32) -> HRESULT {
-        let done: extern "system" fn(*mut c_void, u32) -> bool = call(array, 0x18);
+        let done: extern "win64" fn(*mut c_void, u32) -> bool = call(array, 0x18);
         let start = Instant::now();
         while !done(array, index) {
             assert!(start.elapsed() < Duration::from_secs(10), "never completed");
@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn half_a_queue_submits_itself() {
         let (_dir, file) = file_with(&pattern(64));
-        let create: extern "system" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
+        let create: extern "win64" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
             call(factory(), 0x50);
         let desc = QueueDesc {
             source_type: 0,
@@ -1781,7 +1781,7 @@ mod tests {
         // request is enqueued, the right page by its Submit.
         let mut list = [pages[0]];
         let plain = pattern(4096);
-        let create: extern "system" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
+        let create: extern "win64" fn(*mut c_void, *const QueueDesc, *const Guid, Out) -> HRESULT =
             call(factory(), 0x50);
         let desc = QueueDesc {
             source_type: 0,

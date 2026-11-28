@@ -36,7 +36,7 @@ struct Signature {
 }
 
 /// Device method.
-pub(crate) extern "system" fn create(
+pub(crate) extern "win64" fn create(
     _: This,
     desc: *const Desc,
     _root: This,
@@ -76,11 +76,11 @@ pub(crate) fn layout<'a>(this: This) -> Option<(u32, &'a [[u32; 4]])> {
     Some((s.stride, &s.arguments))
 }
 
-extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
+extern "win64" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT {
     let found = object::is(iid, &SIGNATURE_IIDS).then_some(this);
     object::answer(COMMAND_SIGNATURE, iid, found, out)
 }
-extern "system" fn release(this: This) -> u32 {
+extern "win64" fn release(this: This) -> u32 {
     object::release_boxed::<Signature>(this)
 }
 

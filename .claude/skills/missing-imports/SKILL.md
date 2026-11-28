@@ -46,7 +46,7 @@ Rank by:
 
 | What is missing | Where the fix goes |
 |---|---|
-| an export of a DLL a module already serves | an `extern "system"` function named exactly like the import, listed with `hle_export!` in that module's `module()`, as `crates/leonida-hle/src/modules/xmem.rs` does |
+| an export of a DLL a module already serves | an `extern "win64"` function named exactly like the import, listed with `hle_export!` in that module's `module()`, as `crates/leonida-hle/src/modules/xmem.rs` does |
 | a DLL no module serves | a new file in `crates/leonida-hle/src/modules/`, declared in `mod.rs` and pushed in `all()`; its `dlls` list may end a name with `*` to cover versioned API sets (`crates/leonida-hle/src/registry.rs`) |
 | a D3D12.X method that answers `E_NOTIMPL` | the object's table in `crates/leonida-gpu/src/` (`object.rs` names the kind and the slot); device methods and pipeline creation are in `device.rs` |
 | a file the title cannot open | `crates/leonida-hle/src/modules/files.rs`: the package is mounted as `G:` and temporary files as `T:` (`apps/leonida/src/run.rs`) |

@@ -203,7 +203,7 @@ pub(crate) fn ram_idle_ms(avail_phys: Option<u64>) -> u64 {
 /// with one is held by its owner alone: no descriptor slot keeps it
 /// (`HostHeap::kept`) and no list (`HostList::keep`).
 pub(crate) fn references(object: &impl Interface) -> u32 {
-    type Method = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
+    type Method = unsafe extern "win64" fn(*mut std::ffi::c_void) -> u32;
     let raw = object.as_raw();
     // SAFETY: a live COM object, whose first three methods are those of
     // `IUnknown` (query, add a reference, release one); the pair leaves the
