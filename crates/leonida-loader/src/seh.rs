@@ -143,6 +143,11 @@ fn image_of(pc: u64) -> Option<(u64, &'static [RuntimeFunction])> {
         })
 }
 
+/// The base of the mapped image holding `pc` (`RtlPcToFileHeader`).
+pub fn image_base(pc: usize) -> Option<usize> {
+    image_of(pc as u64).map(|(base, _)| base as usize)
+}
+
 /// `module+rva` for a crash report.
 fn locate(address: u64) -> String {
     match image_of(address) {

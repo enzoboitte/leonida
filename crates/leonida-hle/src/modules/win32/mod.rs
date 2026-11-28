@@ -11,7 +11,9 @@
 
 pub mod files;
 mod memory;
+mod misc;
 pub mod net;
+mod pool;
 mod sync;
 mod system;
 mod thread;
@@ -64,6 +66,8 @@ const SEH: [&str; 10] = [
 pub fn module() -> HleModule {
     use files::*;
     use memory::*;
+    use misc::*;
+    use pool::*;
     use sync::*;
     use system::*;
     use thread::*;
@@ -222,6 +226,55 @@ pub fn module() -> HleModule {
         hle_export!(InterlockedPopEntrySList),
         hle_export!(InterlockedFlushSList),
         hle_export!(QueryDepthSList),
+        // thread pool
+        hle_export!(CreateThreadpoolWork),
+        hle_export!(SubmitThreadpoolWork),
+        hle_export!(WaitForThreadpoolWorkCallbacks),
+        hle_export!(CloseThreadpoolWork),
+        hle_export!(CreateThreadpoolTimer),
+        hle_export!(SetThreadpoolTimer),
+        hle_export!(WaitForThreadpoolTimerCallbacks),
+        hle_export!(CloseThreadpoolTimer),
+        hle_export!(CreateThreadpoolWait),
+        hle_export!(SetThreadpoolWait),
+        hle_export!(WaitForThreadpoolWaitCallbacks),
+        hle_export!(CloseThreadpoolWait),
+        hle_export!(QueueUserWorkItem),
+        hle_export!(CallbackMayRunLong),
+        hle_export!(DisassociateCurrentThreadFromCallback),
+        hle_export!(FreeLibraryWhenCallbackReturns),
+        // the rest
+        hle_export!(EncodePointer),
+        hle_export!(DecodePointer),
+        hle_export!(UnhandledExceptionFilter),
+        hle_export!(RtlPcToFileHeader),
+        hle_export!(RtlCaptureStackBackTrace),
+        hle_export!(DebugBreak),
+        hle_export!(RaiseFailFastException),
+        hle_export!(FlushProcessWriteBuffers),
+        hle_export!(LocalAlloc),
+        hle_export!(LocalFree),
+        hle_export!(GlobalFree),
+        hle_export!(FormatMessageW),
+        hle_export!(FormatMessageA),
+        hle_export!(lstrlenW),
+        hle_export!(lstrcmpiW),
+        hle_export!(CompareStringEx),
+        hle_export!(GetStringTypeW),
+        hle_export!(GetStringTypeExW),
+        hle_export!(LCMapStringEx),
+        hle_export!(GetLocaleInfoEx),
+        hle_export!(GetUserDefaultUILanguage),
+        hle_export!(SetEnvironmentVariableA),
+        hle_export!(SetThreadIdealProcessorEx),
+        hle_export!(GetSystemTimeAdjustment),
+        hle_export!(GetConsoleWindow),
+        hle_export!(EventRegister),
+        hle_export!(EventUnregister),
+        hle_export!(EventSetInformation),
+        hle_export!(EventWriteTransfer),
+        hle_export!(RegisterAppStateChangeNotification),
+        hle_export!(UnregisterAppStateChangeNotification),
     ];
     for name in SEH {
         if let Some(address) = leonida_loader::seh_export("kernel32.dll", name) {
@@ -234,7 +287,9 @@ pub fn module() -> HleModule {
             "kernel32.dll",
             "kernelbase.dll",
             "ntdll.dll",
+            "advapi32.dll",
             "api-ms-win-core-*",
+            "api-ms-win-eventing-*",
         ],
         exports,
     }
