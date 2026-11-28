@@ -290,7 +290,21 @@ fn dispatch(record: &mut ExceptionRecord, ctx: &mut Context) -> ! {
             break; // no progress: a broken stack
         }
     }
+    // `LEONIDA_SKIP_BREAKPOINTS=1` (off): a breakpoint no handler takes (a
+    // title's own check) is stepped over, as a debugger does when told to go
+    // on, to see how far the title gets past it. Each one is said.
+    if record.code == STATUS_BREAKPOINT && skip_breakpoints() {
+        eprintln!("Leonida Legacy: a breakpoint of the title at {} stepped over", locate(ctx.rip));
+        forget_dispatches_below(ctx.rsp() + 1);
+        ctx.rip += 1;
+        restore(ctx);
+    }
     unhandled(record, "no handler took it");
+}
+
+fn skip_breakpoints() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_SKIP_BREAKPOINTS").is_some_and(|v| v == "1"))
 }
 
 fn unhandled(record: &ExceptionRecord, why: &str) -> ! {

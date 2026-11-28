@@ -191,3 +191,10 @@ On the user's Xbox Series copy the game now gets past the C runtime's start-up, 
 graphics memory, initialises the GDK runtime, creates GameInput, opens its archives through
 DirectStorage (twelve `.rpf` files), maps physical pages, and stops at one of its own checks
 (a breakpoint) further on. 210 tests pass on x86-64 macOS.
+
+`LEONIDA_SKIP_BREAKPOINTS=1` (macOS, off): a breakpoint of the title no handler takes is stepped
+over, and said, to see how far the title gets past one of its own checks. With it, on the user's
+copy, the game gets past one check (a size it measures stays under 2 MiB) to its first graphics
+call that needs the host: `D3D12SerializeVersionedRootSignature`, which on Windows hands the root
+signature to the host's `d3d12.dll`. macOS has none, the call fails, and the game ends with a C++
+exception no handler catches. That is where the Metal back end has to take over.
