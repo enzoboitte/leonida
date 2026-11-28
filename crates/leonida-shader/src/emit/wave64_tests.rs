@@ -422,11 +422,12 @@ fn a_wave_or_inside(skip: u32, name: &str) {
 /// Runs `shader` on the hardware device with the root constants `s0`, `s1` and gives dword 0
 /// of the UAV; None (and a line) without a device that takes it.
 fn on_the_card(shader: &HostShader, constants: [u32; 2]) -> Option<u32> {
-    whole_uav(shader, constants, 1).map(|out| out[0])
+    whole_uav(shader, &constants, 1).map(|out| out[0])
 }
 
-/// As [`on_the_card`], and gives the first `dwords` dwords of the UAV.
-fn whole_uav(shader: &HostShader, constants: [u32; 2], dwords: u32) -> Option<Vec<u32>> {
+/// As [`on_the_card`] with the root constants `s0`.., and gives the first `dwords` dwords of
+/// the UAV.
+fn whole_uav(shader: &HostShader, constants: &[u32], dwords: u32) -> Option<Vec<u32>> {
     let Ok(host) = Host::new(false) else {
         eprintln!("no SM 6.6 hardware device; not run");
         return None;
@@ -437,8 +438,10 @@ fn whole_uav(shader: &HostShader, constants: [u32; 2], dwords: u32) -> Option<Ve
     };
     let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
     for u in &shader.user_data {
-        if let (RootType::Constants, 0, d @ 0..=1) = (u.root, u.slot, u.dword) {
-            ud[u.index as usize] = constants[d as usize];
+        if let (RootType::Constants, 0, d) = (u.root, u.slot, u.dword)
+            && let Some(&c) = constants.get(d as usize)
+        {
+            ud[u.index as usize] = c;
         }
     }
     let out = host
@@ -454,6 +457,37 @@ fn whole_uav(shader: &HostShader, constants: [u32; 2], dwords: u32) -> Option<Ve
         )
         .unwrap_or_else(|e| panic!("dispatch failed: {e}"));
     Some(out[0].clone())
+}
+
+/// A 64-bit mask the program does not track, read as a number by a select, in a console wave of
+/// 64 that runs as two host waves of 32 (the DPP move makes it take the console's lanes, so the
+/// halves form): `v_cndmask_b32` reads s[2:3] (root constants), so each lane takes its own bit of
+/// it, lanes 32-63 the high dword's. Their host lane numbers are 0-31 in the second host wave, so
+/// they must be numbered by their console lane, not by the host lane. From
+/// trustno1-coder/VIctory-NVIDIA c1d8179.
+#[test]
+fn lanes_past_32_take_the_high_dword_of_a_mask_held_as_a_number() {
+    let words = [
+        0x7E0E_02FA,
+        0xFFFF_B100, // v_mov_b32_dpp v7, v0 quad_perm:[1,0,3,2] row_mask:0xf bank_mask:0xf
+        0xD501_0005,
+        0x0009_0280, // v_cndmask_b32 v5, 0, 1, s[2:3]
+        0x340C_0082, // v_lshlrev_b32 v6, 2, v0
+        0xE070_1000,
+        0x8002_0506, // buffer_store_dword v5, v6, s[8:11], 0 offen
+    ];
+    let native = native(&words);
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    let shader = lowered_on(&native, &p, &HashSet::new(), 32).expect("lower");
+    for (lo, hi) in [(0x5555_0F0F, 0xA0F0_1234), (u32::MAX, 0), (0, u32::MAX)] {
+        let Some(out) = whole_uav(&shader, &[0, 0, lo, hi], 64) else {
+            return;
+        };
+        for lane in 0..64u32 {
+            let bit = if lane < 32 { (lo >> lane) & 1 } else { (hi >> (lane - 32)) & 1 };
+            assert_eq!(out[lane as usize], bit, "lane {lane} of the mask {hi:08x}{lo:08x}");
+        }
+    }
 }
 
 /// A 32-lane console wave. A register holds a lane mask on one path (the lanes below s0)
@@ -635,7 +669,7 @@ fn a_far_early_out_is_left_out_and_the_gate_counts_the_lanes_of_both_halves() {
     let cases =
         [(128u32, 40u32), (128, 100), (128, 63), (40, 50), (40, 10), (33, 32), (1, 0), (0, 5)];
     for (below, failing) in cases {
-        let Some(got) = whole_uav(&shader, [below, failing], 128) else { return };
+        let Some(got) = whole_uav(&shader, &[below, failing], 128) else { return };
         let expected = gate_expected(below, failing);
         assert_eq!(got, expected, "{below} threads in bounds, thread {failing} fails");
     }
