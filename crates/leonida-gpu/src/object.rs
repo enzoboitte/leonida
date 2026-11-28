@@ -66,12 +66,12 @@ pub(crate) struct Table<const N: usize>(pub [*const (); N]);
 // SAFETY: function addresses only.
 unsafe impl<const N: usize> Sync for Table<N> {}
 
-pub(crate) extern "system" fn add_ref(this: This) -> u32 {
+pub(crate) extern "win64" fn add_ref(this: This) -> u32 {
     // SAFETY: `this` is one of our objects.
     unsafe { &*this }.refs.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-pub(crate) extern "system" fn release(this: This) -> u32 {
+pub(crate) extern "win64" fn release(this: This) -> u32 {
     // SAFETY: `this` is one of our objects.
     let refs = &unsafe { &*this }.refs;
     let _ = refs.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
@@ -150,7 +150,7 @@ fn private_data() -> std::sync::MutexGuard<'static, BTreeMap<(usize, Iid), Vec<u
     PRIVATE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-extern "system" fn get_private_data(
+extern "win64" fn get_private_data(
     this: This,
     id: *const Iid,
     size: *mut u32,
@@ -179,7 +179,7 @@ extern "system" fn get_private_data(
 }
 
 /// Null data removes the entry.
-extern "system" fn set_private_data(
+extern "win64" fn set_private_data(
     this: This,
     id: *const Iid,
     size: u32,
@@ -210,7 +210,7 @@ pub(crate) const fn d3d12_object<const N: usize>(mut f: [*const (); N]) -> [*con
 }
 
 /// The object methods' name setter: names only reach our log.
-pub(crate) extern "system" fn set_name(this: This, name: *const u16) -> HRESULT {
+pub(crate) extern "win64" fn set_name(this: This, name: *const u16) -> HRESULT {
     let name = if name.is_null() {
         String::new()
     } else {
@@ -225,7 +225,7 @@ pub(crate) extern "system" fn set_name(this: This, name: *const u16) -> HRESULT 
 
 /// The device-child method: the device that made the object, as any of
 /// the interfaces the device itself answers to.
-pub(crate) extern "system" fn parent_device(_: This, iid: *const Iid, out: *mut This) -> HRESULT {
+pub(crate) extern "win64" fn parent_device(_: This, iid: *const Iid, out: *mut This) -> HRESULT {
     let device = crate::device::device();
     answer(
         DEVICE,
@@ -279,7 +279,7 @@ static REPORTED: [[AtomicBool; MAX_SLOTS]; KINDS.len()] =
 /// Logged once per slot, with the caller's offset in its module (the title
 /// image for title calls). Wrong for a slot that returns a value instead of
 /// an `HRESULT`.
-extern "system" fn missing<const KIND: usize, const SLOT: usize>() -> HRESULT {
+extern "win64" fn missing<const KIND: usize, const SLOT: usize>() -> HRESULT {
     if !REPORTED[KIND][SLOT].swap(true, Ordering::Relaxed) {
         tracing::warn!(
             object = KINDS[KIND],
@@ -325,7 +325,7 @@ fn caller() -> String {
 }
 
 /// Accepts and ignores (debug-only settings).
-pub(crate) extern "system" fn ignore() -> HRESULT {
+pub(crate) extern "win64" fn ignore() -> HRESULT {
     S_OK
 }
 

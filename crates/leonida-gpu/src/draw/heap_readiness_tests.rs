@@ -149,7 +149,7 @@ impl TitleHeap {
 
 impl Drop for TitleHeap {
     fn drop(&mut self) {
-        slot::<extern "system" fn(This) -> u32>(self.0, 16)(self.0);
+        slot::<extern "win64" fn(This) -> u32>(self.0, 16)(self.0);
     }
 }
 
