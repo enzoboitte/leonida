@@ -263,6 +263,19 @@ pub extern "win64" fn gethostname(out: *mut u8, size: i32) -> i32 {
     0
 }
 
+/// A dotted IPv4 address in network order, or `INADDR_NONE`.
+#[allow(non_snake_case)]
+pub extern "win64" fn inet_addr(text: *const u8) -> u32 {
+    if text.is_null() {
+        return u32::MAX;
+    }
+    // SAFETY: a NUL-terminated string.
+    let text = unsafe { std::ffi::CStr::from_ptr(text.cast()) }.to_string_lossy();
+    text.trim()
+        .parse::<std::net::Ipv4Addr>()
+        .map_or(u32::MAX, |a| u32::from_ne_bytes(a.octets()))
+}
+
 #[allow(non_snake_case)]
 pub extern "win64" fn htons(v: u16) -> u16 {
     v.to_be()
@@ -337,6 +350,65 @@ pub extern "win64" fn WinHttpGetProxyForUrl(
     0
 }
 
+/// No connection can exist (see `WinHttpConnect`), so nothing made from one
+/// can either: every call on a request fails as on a handle of the wrong kind.
+const ERROR_WINHTTP_INCORRECT_HANDLE_TYPE: u32 = 12018;
+const ERROR_WINHTTP_INVALID_URL: u32 = 12005;
+
+fn no_request() -> i32 {
+    set_last_error(ERROR_WINHTTP_INCORRECT_HANDLE_TYPE);
+    0
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn WinHttpOpenRequest(
+    _: usize,
+    _: *const u16,
+    _: *const u16,
+    _: *const u16,
+    _: *const u16,
+    _: *const usize,
+    _: u32,
+) -> usize {
+    no_request();
+    0
+}
+
+macro_rules! on_request {
+    ($($name:ident($($t:ty),*);)*) => {
+        $(
+            #[allow(non_snake_case)]
+            pub extern "win64" fn $name(_: usize $(, _: $t)*) -> i32 {
+                no_request()
+            }
+        )*
+    };
+}
+
+on_request! {
+    WinHttpAddRequestHeaders(*const u16, u32, u32);
+    WinHttpSendRequest(*const u16, u32, *const c_void, u32, u32, usize);
+    WinHttpReceiveResponse(*mut c_void);
+    WinHttpQueryHeaders(u32, *const u16, *mut c_void, *mut u32, *mut u32);
+    WinHttpQueryDataAvailable(*mut u32);
+    WinHttpReadData(*mut c_void, u32, *mut u32);
+    WinHttpWriteData(*const c_void, u32, *mut u32);
+    WinHttpQueryOption(u32, *mut c_void, *mut u32);
+}
+
+/// No previous callback; none will be called (no request ever runs).
+#[allow(non_snake_case)]
+pub extern "win64" fn WinHttpSetStatusCallback(_: usize, _: usize, _: u32, _: usize) -> usize {
+    0
+}
+
+/// shortcut: URLs are not taken apart (nothing could be fetched from one).
+#[allow(non_snake_case)]
+pub extern "win64" fn WinHttpCrackUrl(_: *const u16, _: u32, _: u32, _: *mut c_void) -> i32 {
+    set_last_error(ERROR_WINHTTP_INVALID_URL);
+    0
+}
+
 pub fn module() -> HleModule {
     let mut exports = vec![
         hle_export!(WSAStartup),
@@ -377,6 +449,7 @@ pub fn module() -> HleModule {
         hle_export!(gethostbyname),
         hle_export!(gethostbyaddr),
         hle_export!(gethostname),
+        hle_export!(inet_addr),
         hle_export!(htons),
         hle_export!(ntohs),
         hle_export!(htonl),
@@ -388,9 +461,20 @@ pub fn module() -> HleModule {
         hle_export!(WinHttpSetTimeouts),
         hle_export!(WinHttpDetectAutoProxyConfigUrl),
         hle_export!(WinHttpGetProxyForUrl),
+        hle_export!(WinHttpOpenRequest),
+        hle_export!(WinHttpAddRequestHeaders),
+        hle_export!(WinHttpSendRequest),
+        hle_export!(WinHttpReceiveResponse),
+        hle_export!(WinHttpQueryHeaders),
+        hle_export!(WinHttpQueryDataAvailable),
+        hle_export!(WinHttpReadData),
+        hle_export!(WinHttpWriteData),
+        hle_export!(WinHttpQueryOption),
+        hle_export!(WinHttpSetStatusCallback),
+        hle_export!(WinHttpCrackUrl),
     ];
     // Winsock's well-known ordinals, for titles that import it by number.
-    let ordinals: [(&'static str, &str); 29] = [
+    let ordinals: [(&'static str, &str); 30] = [
         ("#1", "accept"),
         ("#2", "bind"),
         ("#3", "closesocket"),
@@ -401,6 +485,7 @@ pub fn module() -> HleModule {
         ("#8", "htonl"),
         ("#9", "htons"),
         ("#10", "ioctlsocket"),
+        ("#11", "inet_addr"),
         ("#13", "listen"),
         ("#14", "ntohl"),
         ("#15", "ntohs"),

@@ -84,5 +84,11 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(win32::xmem::module());
     #[cfg(target_os = "macos")]
     all.push(win32::net::module());
+    #[cfg(target_os = "macos")]
+    all.push(win32::oleaut32());
+    #[cfg(target_os = "macos")]
+    all.push(win32::xaudio2());
+    #[cfg(target_os = "macos")]
+    all.extend(win32::more::modules());
     all
 }

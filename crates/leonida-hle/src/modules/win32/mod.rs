@@ -9,9 +9,11 @@
 // As in `files.rs` on Windows: the exports take the title's pointers by contract.
 #![allow(clippy::not_unsafe_ptr_arg_deref, clippy::too_many_arguments)]
 
+mod com;
 pub mod files;
 mod memory;
 mod misc;
+pub mod more;
 pub mod net;
 mod pool;
 mod sync;
@@ -64,9 +66,11 @@ const SEH: [&str; 10] = [
 ];
 
 pub fn module() -> HleModule {
+    use com::*;
     use files::*;
     use memory::*;
     use misc::*;
+    use more::*;
     use pool::*;
     use sync::*;
     use system::*;
@@ -202,6 +206,95 @@ pub fn module() -> HleModule {
         hle_export!(CreateSymbolicLinkW),
         hle_export!(DuplicateHandle),
         hle_export!(GetModuleHandleExW),
+        // COM and WinRT
+        hle_export!(CoTaskMemAlloc),
+        hle_export!(CoTaskMemFree),
+        hle_export!(CoCreateGuid),
+        hle_export!(CoCreateInstance),
+        hle_export!(CoGetApartmentType),
+        hle_export!(CoGetContextToken),
+        hle_export!(CoGetObjectContext),
+        hle_export!(CoCreateFreeThreadedMarshaler),
+        hle_export!(CoMarshalInterThreadInterfaceInStream),
+        hle_export!(CoGetInterfaceAndReleaseStream),
+        hle_export!(CoAddRefServerProcess),
+        hle_export!(CoReleaseServerProcess),
+        hle_export!(PropVariantClear),
+        hle_export!(RoInitialize),
+        hle_export!(RoUninitialize),
+        hle_export!(RoGetActivationFactory),
+        hle_export!(RoRegisterActivationFactories),
+        hle_export!(RoRevokeActivationFactories),
+        hle_export!(RoGetApartmentIdentifier),
+        hle_export!(RoRegisterForApartmentShutdown),
+        hle_export!(RoUnregisterForApartmentShutdown),
+        hle_export!(RoOriginateError),
+        hle_export!(RoTransformError),
+        hle_export!(GetRestrictedErrorInfo),
+        hle_export!(SetRestrictedErrorInfo),
+        hle_export!(WindowsCreateString),
+        hle_export!(WindowsCreateStringReference),
+        hle_export!(WindowsDeleteString),
+        hle_export!(WindowsDuplicateString),
+        hle_export!(WindowsGetStringLen),
+        hle_export!(WindowsGetStringRawBuffer),
+        hle_export!(WindowsIsStringEmpty),
+        hle_export!(WindowsStringHasEmbeddedNull),
+        hle_export!(WindowsCompareStringOrdinal),
+        // certificates, classic tracing, resources, threads, processors
+        hle_export!(CertOpenStore),
+        hle_export!(CertOpenSystemStoreW),
+        hle_export!(CertCloseStore),
+        hle_export!(CertFindCertificateInStore),
+        hle_export!(CertFindChainInStore),
+        hle_export!(CertFreeCertificateContext),
+        hle_export!(CertFreeCertificateChain),
+        hle_export!(CryptStringToBinaryW),
+        hle_export!(RegisterTraceGuidsW),
+        hle_export!(UnregisterTraceGuids),
+        hle_export!(GetTraceLoggerHandle),
+        hle_export!(GetTraceEnableFlags),
+        hle_export!(GetTraceEnableLevel),
+        hle_export!(TraceMessage),
+        hle_export!(FindResourceExW),
+        hle_export!(LoadResource),
+        hle_export!(GetConsoleScreenBufferInfo),
+        hle_export!(InitializeProcThreadAttributeList),
+        hle_export!(UpdateProcThreadAttribute),
+        hle_export!(DeleteProcThreadAttributeList),
+        hle_export!(CreateRemoteThreadEx),
+        hle_export!(GetLogicalProcessorInformationEx),
+        // what the executable imports beyond that
+        hle_export!(GetSystemTime),
+        hle_export!(GetLocalTime),
+        hle_export!(FileTimeToSystemTime),
+        hle_export!(SystemTimeToFileTime),
+        hle_export!(FileTimeToLocalFileTime),
+        hle_export!(LocalFileTimeToFileTime),
+        hle_export!(GetFileTime),
+        hle_export!(GetDateFormatEx),
+        hle_export!(GetTimeFormatEx),
+        hle_export!(GetUserDefaultLocaleName),
+        hle_export!(GetUserDefaultGeoName),
+        hle_export!(LocaleNameToLCID),
+        hle_export!(lstrcmpW),
+        hle_export!(GlobalMemoryStatusEx),
+        hle_export!(GetLogicalProcessorInformation),
+        hle_export!(VirtualQueryEx),
+        hle_export!(GetProcessId),
+        hle_export!(OpenThread),
+        hle_export!(GetCurrentThreadStackLimits),
+        hle_export!(SetProcessPriorityBoost),
+        hle_export!(GetThreadGroupAffinity),
+        hle_export!(SetThreadGroupAffinity),
+        hle_export!(WaitNamedPipeW),
+        hle_export!(SetNamedPipeHandleState),
+        hle_export!(RegisterAppConstrainedChangeNotification),
+        hle_export!(UnregisterAppConstrainedChangeNotification),
+        hle_export!(WerRegisterFile),
+        hle_export!(CoInitializeEx),
+        hle_export!(CoUninitialize),
+        hle_export!(StringFromGUID2),
         // system
         hle_export!(QueryPerformanceCounter),
         hle_export!(QueryPerformanceFrequency),
@@ -294,12 +387,34 @@ pub fn module() -> HleModule {
             "kernelbase.dll",
             "ntdll.dll",
             "advapi32.dll",
+            "crypt32.dll",
             "api-ms-win-core-*",
             "api-ms-win-eventing-*",
         ],
         exports,
     }
 }
+
+/// `xaudio2_9.dll`: `XAudio2Create`, by name and as ordinal 1.
+pub fn xaudio2() -> HleModule {
+    let create = HleExport {
+        name: "XAudio2Create",
+        address: misc::XAudio2Create as *const () as usize,
+    };
+    HleModule {
+        name: "xaudio2",
+        dlls: &["xaudio2_9.dll"],
+        exports: vec![
+            create,
+            HleExport {
+                name: "#1",
+                ..create
+            },
+        ],
+    }
+}
+
+pub use com::oleaut32;
 
 #[cfg(test)]
 mod tests {
