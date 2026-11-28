@@ -25,6 +25,7 @@ error, as it should.
 1. Resources: buffers and textures over title memory. Buffers are done: `wrap()` makes a
    Metal buffer over title pages with no copy (`newBufferWithBytesNoCopy`, shared storage), as the
    Windows side wraps title memory. Textures are left.
+2. Shaders: `leonida-shader` turns console programs into DXIL. Metal needs Metal IR or MSL. The
    choices: Apple's Metal Shader Converter (DXIL to Metal IR; a free download that needs an Apple
    developer sign-in, not installed here, its coverage of this DXIL unknown), or a second emitter
    in `leonida-shader` writing MSL from its IR. A decision for the project.
@@ -35,7 +36,7 @@ error, as it should.
 
 ## Tested
 
-`cargo test -p leonida-gpu --target x86_64-apple-darwin --locked metal`: 2 passed (skipped where
+`cargo test -p leonida-gpu --target x86_64-apple-darwin --locked metal`: 3 passed (skipped where
 there is no Metal device). With the rest of the macOS crates: 172 passed, 6 ignored. Clippy with
 `-D warnings` is clean for `x86_64-apple-darwin`, `aarch64-apple-darwin` (where `leonida-gpu` is
 empty) and, from the Mac, `x86_64-pc-windows-msvc` (the new dependencies are macOS only).
