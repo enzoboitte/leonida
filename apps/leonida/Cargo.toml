@@ -20,6 +20,9 @@ memchr.workspace = true
 clap.workspace = true
 walkdir.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+leonida-gpu.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true

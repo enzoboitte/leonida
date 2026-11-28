@@ -233,6 +233,11 @@ impl Surface {
         &self.layer
     }
 
+    /// Its size in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        self.size
+    }
+
     /// Clears the next image to `rgba` and presents it. With `read`, also
     /// gives its pixels (BGRA, 8 bits each, row by row).
     pub fn present_clear(&self, rgba: [f64; 4], read: bool) -> Result<Option<Vec<u8>>, String> {

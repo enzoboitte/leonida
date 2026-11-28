@@ -25,6 +25,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod metal;
+#[cfg(target_os = "macos")]
+pub mod metal_window;
 pub mod adapter;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;

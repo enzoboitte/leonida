@@ -210,6 +210,24 @@ pub fn run(
     let dlls = dlls.into_iter().map(|(_, dll)| dll).collect();
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { image.run_main(dlls)? };
+    // The title's window, on this (the main) thread while the title runs on its own.
+    // `LEONIDA_NO_WINDOW=1` (off): none, for runs no one watches (the tests).
+    let window = std::env::var_os("LEONIDA_NO_WINDOW").is_none_or(|v| v != "1");
+    if window
+        && let Some(device) = leonida_gpu::metal::device()
+        && let Some(surface) = leonida_gpu::metal::Surface::new(&device, 1280, 720)
+    {
+        let _ = surface.present_clear([0.0, 0.0, 0.0, 1.0], false);
+        match leonida_gpu::metal_window::show("Leonida Legacy", &surface, || !main.is_finished()) {
+            // Closing the window ends the title, as quitting one does on a console.
+            Ok(true) => {
+                println!("window closed: the title ends");
+                std::process::exit(0);
+            }
+            Ok(false) => {}
+            Err(e) => eprintln!("no window: {e}"),
+        }
+    }
     let code = main
         .join()
         .map_err(|_| anyhow::anyhow!("title main thread panicked"))??;

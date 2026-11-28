@@ -57,3 +57,13 @@ next image to a colour and presents it, and can read the pixels back through a b
 buffer. Tested under Rosetta 2 without a window: four images presented, the last read back as the
 colour asked for. Not done: the window (an AppKit `NSWindow` whose view shows the layer, on the
 main thread while the title runs on its own), and presenting the title's own frames.
+
+## The window
+
+`leonida_gpu::metal_window::show` puts a `Surface`'s layer in an AppKit window (titled, closable,
+resizable, centred) and runs its events on the main thread. `leonida run --execute` on macOS
+starts the title on its thread and keeps the main thread in that window while the title runs; a
+closed window ends the title, as quitting one does on a console. `LEONIDA_NO_WINDOW=1` (off by
+default) runs without one, as the macOS run test does. Run with the stand-in exe under Rosetta 2:
+the window opened and closed with the title, no error. The window shows a black image: the
+title's frames do not reach the surface yet.
