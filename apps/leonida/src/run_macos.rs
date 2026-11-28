@@ -28,6 +28,7 @@ impl ImportResolver for WithDlls<'_> {
         if found != Resolution::Missing {
             return found;
         }
+        let dll = api_set(dll);
         let Some((_, image)) = self.dlls.iter().find(|(n, _)| n.eq_ignore_ascii_case(dll)) else {
             return Resolution::Missing;
         };
@@ -45,23 +46,35 @@ impl ImportResolver for WithDlls<'_> {
     }
 }
 
-/// A DLL of the title's folder (any case), unless we serve that DLL.
-fn title_dll(dir: &Path, dll: &str) -> Option<PathBuf> {
+/// The DLL behind an API set Windows redirects to one: the C runtime's
+/// (`api-ms-win-crt-*`) is `ucrtbase.dll`. Others are ours or named as is.
+fn api_set(dll: &str) -> &str {
+    if dll.to_ascii_lowercase().starts_with("api-ms-win-crt-") {
+        "ucrtbase.dll"
+    } else {
+        dll
+    }
+}
+
+/// A DLL from the first of `dirs` that has it (any case), unless we serve it.
+fn title_dll(dirs: &[&Path], dll: &str) -> Option<PathBuf> {
     if leonida_hle::registry().iter().any(|m| m.serves(dll)) {
         return None;
     }
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(dll))
-        .map(|e| e.path())
+    dirs.iter().find_map(|dir| {
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(dll))
+            .map(|e| e.path())
+    })
 }
 
 /// Maps the title DLLs `info` imports, each after the ones it imports, into
 /// `dlls` (load order: dependencies first).
 fn map_dlls(
     info: &ImageInfo,
-    dir: &Path,
+    dirs: &[&Path],
     resolver: &HleResolver,
     policy: UnimplementedPolicy,
     seen: &mut HashSet<String>,
@@ -69,26 +82,30 @@ fn map_dlls(
     show: &dyn Fn(&str, &BindReport),
 ) -> Result<()> {
     for module in info.imports.iter().chain(&info.delay_imports) {
-        let name = module.dll.to_ascii_lowercase();
-        if !seen.insert(name.clone()) {
+        let dll = api_set(&module.dll);
+        if !seen.insert(dll.to_ascii_lowercase()) {
             continue;
         }
-        let Some(path) = title_dll(dir, &module.dll) else {
+        let Some(path) = title_dll(dirs, dll) else {
             continue;
         };
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let dll_info = ImageInfo::parse(&bytes)?;
-        map_dlls(&dll_info, dir, resolver, policy, seen, dlls, show)?;
+        map_dlls(&dll_info, dirs, resolver, policy, seen, dlls, show)?;
         let with = WithDlls {
             inner: resolver,
             dlls,
         };
         let (image, report) = MappedImage::load(&bytes, &with, policy)
             .with_context(|| format!("mapping {}", path.display()))?;
-        println!("title dll      {} at {:#x}", module.dll, image.base());
+        println!(
+            "title dll      {dll} at {:#x} ({})",
+            image.base(),
+            path.display()
+        );
         leonida_hle::runtime::set_image_path(image.base(), &path);
-        show(&module.dll, &report);
-        dlls.push((module.dll.clone(), image));
+        show(dll, &report);
+        dlls.push((dll.to_string(), image));
     }
     Ok(())
 }
@@ -153,11 +170,21 @@ pub fn run(
             println!("  missing      {}!{}", m.dll, m.symbol);
         }
     };
+    // The C runtime DLLs (Microsoft's, which the title gets from Windows on a
+    // PC) come from this folder when the title's does not have them.
+    let runtime = cfg.data_subdir("runtime")?;
+    println!("runtime dlls   {}", runtime.display());
     let info = ImageInfo::parse(&original)?;
     let mut dlls = Vec::new();
     let mut seen = HashSet::new();
     map_dlls(
-        &info, title_dir, &resolver, policy, &mut seen, &mut dlls, &show,
+        &info,
+        &[title_dir, &runtime],
+        &resolver,
+        policy,
+        &mut seen,
+        &mut dlls,
+        &show,
     )?;
     let with = WithDlls {
         inner: &resolver,

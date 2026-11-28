@@ -34,3 +34,13 @@ import left to a stub.
 x86_64-apple-darwin --locked`: 164 passed, 5 ignored. Clippy with `-D warnings` is clean for
 `x86_64-apple-darwin`, `aarch64-apple-darwin` and, from the Mac with `CARGO_FEATURE_PURE=1`,
 `x86_64-pc-windows-msvc` (`--all-features`). Not run on Windows.
+
+## The C runtime
+
+A title on a PC gets the C runtime from Windows (`ucrtbase.dll` behind the `api-ms-win-crt-*`
+API sets, and the Visual C++ DLLs). On macOS `leonida run` looks for the DLLs a title imports in
+its folder, then in `<data>/runtime` (`~/.cache/leonida/data/runtime` by default), where the user
+puts Microsoft's own, and maps them as title DLLs: they then import only what `modules::win32`
+gives. Imports from `api-ms-win-crt-*` go to `ucrtbase.dll`, as Windows' API set schema sends
+them. Not tried with Microsoft's DLLs: none is on this Mac. The macOS run test now also runs the
+stand-in exe with its DLL in the runtime folder only (142 again).

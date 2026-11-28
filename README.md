@@ -212,6 +212,12 @@ for people who want to help with the port, not for playing. What works and what 
    It lists every `missing` import. Add `--execute` to start the game; it stops at the first
    missing one and says which.
 
+4. The game also needs Microsoft's C runtime DLLs, which a Windows PC has and a Mac does not:
+   `ucrtbase.dll`, `vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll`, the x64 ones.
+   Microsoft lets them be copied beside a program (the Windows SDK has them under
+   `Redist\ucrt\DLLs\x64`, the Visual C++ Redistributable installs the others). Put them in
+   `~/.cache/leonida/data/runtime/`; `leonida run` prints that folder as `runtime dlls`.
+
 ### Graphics settings
 
 The measured base profile is automatic. Experimental profiles such as `card-windows` remain opt-in.

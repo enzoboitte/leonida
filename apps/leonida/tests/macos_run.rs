@@ -33,26 +33,42 @@ fn an_exe_and_its_title_dll_run() {
     std::fs::copy(out.join("probe_exe.exe"), title.join("probe_exe.exe")).unwrap();
     std::fs::copy(out.join("macos_probe.dll"), title.join("MACOS_PROBE.DLL")).unwrap();
 
-    let run = Command::new(env!("CARGO_BIN_EXE_leonida"))
-        .args(["run", "--execute", "--unimplemented", "zero"])
-        .arg(title.join("probe_exe.exe"))
-        .env("LEONIDA_DATA_DIR", dir.path().join("data"))
-        .env("LEONIDA_CACHE_DIR", dir.path().join("cache"))
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        run.status.success(),
-        "{stdout}\n{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        stdout.contains("title dll      macos_probe.dll"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("bound          probe_exe.exe: 0 hle, 1 title, 0 missing"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("title exited with 142"), "{stdout}");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_leonida"))
+            .args(["run", "--execute", "--unimplemented", "zero"])
+            .arg(title.join("probe_exe.exe"))
+            .env("LEONIDA_DATA_DIR", dir.path().join("data"))
+            .env("LEONIDA_CACHE_DIR", dir.path().join("cache"))
+            .output()
+            .unwrap()
+    };
+    let run_once = |run: std::process::Output| {
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        assert!(
+            run.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert!(
+            stdout.contains("title dll      macos_probe.dll"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("bound          probe_exe.exe: 0 hle, 1 title, 0 missing"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("title exited with 142"), "{stdout}");
+    };
+    run_once(run());
+
+    // A DLL the title folder lacks comes from the runtime folder (as the C
+    // runtime's do).
+    let runtime = dir.path().join("data").join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::rename(
+        title.join("MACOS_PROBE.DLL"),
+        runtime.join("macos_probe.dll"),
+    )
+    .unwrap();
+    run_once(run());
 }
