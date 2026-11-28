@@ -333,6 +333,7 @@ dependencies = [
  "blake3",
  "leonida-core",
  "leonida-pe",
+ "libc",
  "tempfile",
  "thiserror",
  "tracing",
