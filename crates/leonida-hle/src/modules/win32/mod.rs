@@ -196,6 +196,12 @@ pub fn module() -> HleModule {
         hle_export!(FindNextFileW),
         hle_export!(FindClose),
         hle_export!(GetLogicalDrives),
+        hle_export!(SetFileTime),
+        hle_export!(CopyFile2),
+        hle_export!(CreateHardLinkW),
+        hle_export!(CreateSymbolicLinkW),
+        hle_export!(DuplicateHandle),
+        hle_export!(GetModuleHandleExW),
         // system
         hle_export!(QueryPerformanceCounter),
         hle_export!(QueryPerformanceFrequency),

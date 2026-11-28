@@ -1136,6 +1136,169 @@ pub extern "win64" fn FindClose(handle: usize) -> i32 {
     super::sync::CloseHandle(handle)
 }
 
+/// A FILETIME as host time, or `None` for "leave it" (null or all zero).
+fn timespec(ft: *const u64) -> libc::timespec {
+    // SAFETY: the title's FILETIME, or null.
+    let v = if ft.is_null() {
+        0
+    } else {
+        unsafe { ft.read_unaligned() }
+    };
+    if v == 0 {
+        return libc::timespec {
+            tv_sec: 0,
+            tv_nsec: libc::UTIME_OMIT,
+        };
+    }
+    let since = v.saturating_sub(FILETIME_TO_UNIX);
+    libc::timespec {
+        tv_sec: (since / 10_000_000) as i64,
+        tv_nsec: (since % 10_000_000 * 100) as i64,
+    }
+}
+
+/// shortcut: the creation time cannot be set on the host; access and
+/// write times are.
+#[allow(non_snake_case)]
+pub extern "win64" fn SetFileTime(
+    handle: usize,
+    _created: *const u64,
+    accessed: *const u64,
+    written: *const u64,
+) -> i32 {
+    let Some((fd, _)) = descriptor(handle) else {
+        set_last_error(ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let times = [timespec(accessed), timespec(written)];
+    // SAFETY: a descriptor of ours and two timespecs.
+    if unsafe { libc::futimens(fd, times.as_ptr()) } != 0 {
+        fail(&std::io::Error::last_os_error());
+        return 0;
+    }
+    1
+}
+
+/// `HRESULT_FROM_WIN32` of the last error.
+fn hresult_of_last() -> i32 {
+    match super::GetLastError() {
+        0 => 0,
+        e => (0x8007_0000 | (e & 0xFFFF)) as i32,
+    }
+}
+
+/// `COPYFILE2_EXTENDED_PARAMETERS`: size, then the copy flags.
+#[allow(non_snake_case)]
+pub extern "win64" fn CopyFile2(from: *const u16, to: *const u16, parameters: *const u32) -> i32 {
+    const FAIL_IF_EXISTS: u32 = 1;
+    // SAFETY: NUL-terminated paths.
+    let (Some(from), Some(to)) = (host_of(unsafe { wide(from) }), host_of(unsafe { wide(to) }))
+    else {
+        return hresult_of_last();
+    };
+    // SAFETY: the title's parameters, or null.
+    let flags = if parameters.is_null() {
+        0
+    } else {
+        unsafe { *parameters.add(1) }
+    };
+    if flags & FAIL_IF_EXISTS != 0 && to.exists() {
+        set_last_error(ERROR_FILE_EXISTS);
+        return hresult_of_last();
+    }
+    match std::fs::copy(from, to) {
+        Ok(_) => 0,
+        Err(e) => {
+            fail(&e);
+            hresult_of_last()
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+pub extern "win64" fn CreateHardLinkW(
+    link: *const u16,
+    existing: *const u16,
+    _security: *const c_void,
+) -> i32 {
+    // SAFETY: NUL-terminated paths.
+    let (Some(link), Some(existing)) = (
+        host_of(unsafe { wide(link) }),
+        host_of(unsafe { wide(existing) }),
+    ) else {
+        return 0;
+    };
+    result(std::fs::hard_link(existing, link))
+}
+
+/// shortcut: the target is taken as a title path, resolved now, so a
+/// relative target is relative to the current directory, not the link's.
+#[allow(non_snake_case)]
+pub extern "win64" fn CreateSymbolicLinkW(link: *const u16, target: *const u16, _flags: u32) -> u8 {
+    // SAFETY: NUL-terminated paths.
+    let (Some(link), Some(target)) = (
+        host_of(unsafe { wide(link) }),
+        host_of(unsafe { wide(target) }),
+    ) else {
+        return 0;
+    };
+    (result(std::os::unix::fs::symlink(target, link)) != 0).into()
+}
+
+/// A second handle to an open file (a new host descriptor on the same file),
+/// or a pseudo handle as itself.
+/// shortcut: events, mutexes, semaphores and threads cannot be duplicated yet
+/// (`ERROR_NOT_SUPPORTED`): their handle owns their state.
+#[allow(non_snake_case)]
+pub extern "win64" fn DuplicateHandle(
+    _from: usize,
+    handle: usize,
+    _to: usize,
+    out: *mut usize,
+    _access: u32,
+    _inherit: i32,
+    options: u32,
+) -> i32 {
+    const CLOSE_SOURCE: u32 = 1;
+    let made = if matches!(
+        handle,
+        super::sync::CURRENT_PROCESS | super::sync::CURRENT_THREAD
+    ) || close_std(handle)
+    {
+        Some(handle)
+    } else {
+        // The table's lock is let go before the new handle is added.
+        let file = match table().get_mut(handle) {
+            Some(Object::File { fd, overlapped, .. }) => (*fd, *overlapped),
+            _ => {
+                set_last_error(50); // ERROR_NOT_SUPPORTED
+                return 0;
+            }
+        };
+        // SAFETY: a descriptor of ours.
+        let copy = unsafe { libc::dup(file.0) };
+        (copy >= 0).then(|| {
+            table().add(Object::File {
+                fd: copy,
+                overlapped: file.1,
+                delete: None,
+            })
+        })
+    };
+    let Some(made) = made else {
+        fail(&std::io::Error::last_os_error());
+        return 0;
+    };
+    if !out.is_null() {
+        // SAFETY: the title's out pointer.
+        unsafe { *out = made };
+    }
+    if options & CLOSE_SOURCE != 0 && made != handle {
+        super::sync::CloseHandle(handle);
+    }
+    1
+}
+
 #[allow(non_snake_case)]
 pub extern "win64" fn GetLogicalDrives() -> u32 {
     let _ = changed;
@@ -1281,6 +1444,80 @@ mod tests {
         assert_eq!(super::super::GetLastError(), ERROR_FILE_NOT_FOUND);
         assert_eq!(DeleteFileW(w(r"R:\saves\slot2.dat").as_ptr()), 1);
         assert_eq!(RemoveDirectoryW(w(r"R:\saves").as_ptr()), 1);
+    }
+
+    #[test]
+    fn files_are_copied_linked_duplicated_and_dated() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), b"data").unwrap();
+        mount_at('P', dir.path());
+        assert_eq!(
+            CopyFile2(
+                w(r"P:\a.bin").as_ptr(),
+                w(r"P:\b.bin").as_ptr(),
+                std::ptr::null()
+            ),
+            0
+        );
+        let fail_if_exists = [24u32, 1];
+        assert_ne!(
+            CopyFile2(
+                w(r"P:\a.bin").as_ptr(),
+                w(r"P:\b.bin").as_ptr(),
+                fail_if_exists.as_ptr()
+            ),
+            0
+        );
+        assert_eq!(
+            CreateHardLinkW(
+                w(r"P:\c.bin").as_ptr(),
+                w(r"P:\a.bin").as_ptr(),
+                std::ptr::null()
+            ),
+            1
+        );
+        assert_eq!(std::fs::read(dir.path().join("c.bin")).unwrap(), b"data");
+
+        let h = CreateFileW(
+            w(r"P:\b.bin").as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            0,
+        );
+        let mut copy = 0;
+        assert_eq!(
+            DuplicateHandle(usize::MAX, h, usize::MAX, &mut copy, 0, 0, 0),
+            1
+        );
+        let mut buf = [0u8; 4];
+        let mut n = 0;
+        assert_eq!(
+            ReadFile(copy, buf.as_mut_ptr(), 4, &mut n, std::ptr::null_mut()),
+            1
+        );
+        assert_eq!(&buf[..n as usize], b"data");
+        // 2020-01-01 as a FILETIME.
+        let when = FILETIME_TO_UNIX + 1_577_836_800 * 10_000_000;
+        assert_eq!(SetFileTime(h, std::ptr::null(), std::ptr::null(), &when), 1);
+        super::super::sync::CloseHandle(copy);
+        super::super::sync::CloseHandle(h);
+        let modified = std::fs::metadata(dir.path().join("b.bin"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(
+            modified.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            1_577_836_800
+        );
+        let event = super::super::sync::CreateEventW(std::ptr::null(), 0, 0, std::ptr::null());
+        assert_eq!(
+            DuplicateHandle(usize::MAX, event, usize::MAX, &mut copy, 0, 0, 0),
+            0,
+            "not yet"
+        );
     }
 
     #[test]
