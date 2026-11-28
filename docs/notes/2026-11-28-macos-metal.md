@@ -22,9 +22,9 @@ error, as it should.
 
 ## What is left (the bulk of the port)
 
-1. Resources: buffers and textures over title memory. With unified memory, Metal can wrap the
-   title's pages (`newBufferWithBytesNoCopy`), as the Windows side wraps title memory today.
-2. Shaders: `leonida-shader` turns console programs into DXIL. Metal needs Metal IR or MSL. The
+1. Resources: buffers and textures over title memory. Buffers are done: `wrap()` makes a
+   Metal buffer over title pages with no copy (`newBufferWithBytesNoCopy`, shared storage), as the
+   Windows side wraps title memory. Textures are left.
    choices: Apple's Metal Shader Converter (DXIL to Metal IR; a free download that needs an Apple
    developer sign-in, not installed here, its coverage of this DXIL unknown), or a second emitter
    in `leonida-shader` writing MSL from its IR. A decision for the project.
@@ -39,3 +39,12 @@ error, as it should.
 there is no Metal device). With the rest of the macOS crates: 172 passed, 6 ignored. Clippy with
 `-D warnings` is clean for `x86_64-apple-darwin`, `aarch64-apple-darwin` (where `leonida-gpu` is
 empty) and, from the Mac, `x86_64-pc-windows-msvc` (the new dependencies are macOS only).
+
+## Buffers over title memory
+
+`wrap(device, at, len)` makes a Metal buffer over mapped memory with no copy; `dispatch()` runs a
+kernel on one. Measured under Rosetta 2 (M5, macOS 26.6): a kernel inverting 16 KiB of an
+anonymous mapping's words left them inverted where the CPU reads them, with no copy back. The
+process sees 4 KiB pages under Rosetta (`getconf PAGESIZE`: 4096 under `arch -x86_64`, 16384
+natively); buffers must start and end on them. Whether Metal takes a no-copy buffer that is 4 KiB
+but not 16 KiB aligned was not tried (the mapping in the test was 16 KiB aligned).

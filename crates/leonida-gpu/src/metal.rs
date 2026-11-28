@@ -119,6 +119,84 @@ pub fn run_kernel(
     Ok(out.to_vec())
 }
 
+/// A buffer over title memory, with no copy: on unified memory the GPU
+/// reads and writes the title's own pages, as the console's does. `at` and
+/// `len` must lie on the pages the process sees (4 KiB under Rosetta 2, 16
+/// KiB natively on Apple Silicon); the memory must outlive the buffer.
+///
+/// # Safety
+/// `at..at+len` is mapped read+write memory that stays mapped while the
+/// buffer lives.
+pub unsafe fn wrap(device: &Device, at: usize, len: usize) -> Option<Buffer> {
+    let page = page_size();
+    if !at.is_multiple_of(page) || !len.is_multiple_of(page) || len == 0 {
+        return None;
+    }
+    // SAFETY: the caller's memory; no deallocator, the title owns it.
+    unsafe {
+        device.newBufferWithBytesNoCopy_length_options_deallocator(
+            std::ptr::NonNull::new(at as *mut _)?,
+            len,
+            MTLResourceOptions::StorageModeShared,
+            None,
+        )
+    }
+}
+
+pub type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
+
+/// The host's page size, which no-copy buffers must keep to.
+pub fn page_size() -> usize {
+    // SAFETY: no preconditions.
+    (unsafe { libc::sysconf(libc::_SC_PAGESIZE) }) as usize
+}
+
+/// Runs kernel `name` of `source` over `count` threads with `buffer` at
+/// index 0.
+pub fn dispatch(
+    device: &Device,
+    source: &str,
+    name: &str,
+    buffer: &Buffer,
+    count: usize,
+) -> Result<(), String> {
+    let library = device
+        .newLibraryWithSource_options_error(&NSString::from_str(source), None)
+        .map_err(|e| format!("compiling: {}", e.localizedDescription()))?;
+    let function = library
+        .newFunctionWithName(&NSString::from_str(name))
+        .ok_or_else(|| format!("no kernel {name}"))?;
+    let pipeline = device
+        .newComputePipelineStateWithFunction_error(&function)
+        .map_err(|e| format!("pipeline: {}", e.localizedDescription()))?;
+    let queue = device.newCommandQueue().ok_or("no command queue")?;
+    let commands = queue.commandBuffer().ok_or("no command buffer")?;
+    let encoder = commands.computeCommandEncoder().ok_or("no encoder")?;
+    encoder.setComputePipelineState(&pipeline);
+    // SAFETY: the buffer is index 0 of the kernel.
+    unsafe { encoder.setBuffer_offset_atIndex(Some(buffer), 0, 0) };
+    let width = pipeline.maxTotalThreadsPerThreadgroup().min(count);
+    encoder.dispatchThreads_threadsPerThreadgroup(
+        MTLSize {
+            width: count,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        },
+    );
+    encoder.endEncoding();
+    commands.commit();
+    commands.waitUntilCompleted();
+    match commands.error() {
+        Some(e) => Err(format!("running: {}", e.localizedDescription())),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +226,41 @@ mod tests {
         let out = run_kernel(&device, source, "twice", &input).unwrap();
         assert_eq!(out, input.iter().map(|v| v * 2 + 1).collect::<Vec<_>>());
         assert!(run_kernel(&device, "not metal", "twice", &input).is_err());
+    }
+
+    #[test]
+    fn the_gpu_writes_title_memory_in_place() {
+        let Some(device) = device() else {
+            eprintln!("skipped: no Metal device");
+            return;
+        };
+        let page = page_size();
+        let len = 4 * page;
+        let flags = libc::MAP_PRIVATE | libc::MAP_ANON;
+        let rw = libc::PROT_READ | libc::PROT_WRITE;
+        // SAFETY: a fresh anonymous mapping, ours for the test.
+        let at = unsafe { libc::mmap(std::ptr::null_mut(), len, rw, flags, -1, 0) } as usize;
+        // SAFETY: as above.
+        let words = unsafe { std::slice::from_raw_parts_mut(at as *mut u32, len / 4) };
+        words
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, w)| *w = i as u32);
+        assert!(
+            unsafe { wrap(&device, at + 4, len) }.is_none(),
+            "off a page"
+        );
+        // SAFETY: mapped until the end of the test, after the buffer.
+        let buffer = unsafe { wrap(&device, at, len) }.expect("a no-copy buffer");
+        let source = "kernel void negate(device uint *v [[buffer(0)]],\n\
+                      uint i [[thread_position_in_grid]]) { v[i] = ~v[i]; }";
+        dispatch(&device, source, "negate", &buffer, len / 4).unwrap();
+        assert!(
+            words.iter().enumerate().all(|(i, &w)| w == !(i as u32)),
+            "seen by the CPU in place"
+        );
+        drop(buffer);
+        // SAFETY: the mapping made above, no longer used.
+        unsafe { libc::munmap(at as *mut _, len) };
     }
 }
