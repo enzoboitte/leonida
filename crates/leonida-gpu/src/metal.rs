@@ -10,12 +10,16 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_core_foundation::CGSize;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder,
-    MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily, MTLLibrary,
-    MTLResourceOptions, MTLSize,
+    MTLBlitCommandEncoder, MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder,
+    MTLCommandQueue, MTLComputeCommandEncoder, MTLComputePipelineState,
+    MTLCreateSystemDefaultDevice, MTLDevice, MTLDrawable, MTLGPUFamily, MTLLibrary, MTLLoadAction,
+    MTLOrigin, MTLPixelFormat, MTLRenderPassDescriptor, MTLResourceOptions, MTLSize,
+    MTLStoreAction, MTLTexture,
 };
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
 pub type Device = Retained<ProtocolObject<dyn MTLDevice>>;
 
@@ -197,6 +201,101 @@ pub fn dispatch(
     }
 }
 
+/// Where frames are shown: a Metal layer of the size the title renders at.
+/// Attached to a window (by the runner), it shows on screen; alone, its
+/// images are made and presented all the same, which the tests use.
+pub struct Surface {
+    layer: Retained<CAMetalLayer>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    size: (usize, usize),
+}
+
+impl Surface {
+    pub fn new(device: &Device, width: usize, height: usize) -> Option<Self> {
+        let layer = CAMetalLayer::new();
+        layer.setDevice(Some(device));
+        layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+        // Read back by the tests (and by frame shots later).
+        layer.setFramebufferOnly(false);
+        layer.setDrawableSize(CGSize {
+            width: width as f64,
+            height: height as f64,
+        });
+        let queue = device.newCommandQueue()?;
+        Some(Surface {
+            layer,
+            queue,
+            size: (width, height),
+        })
+    }
+
+    pub fn layer(&self) -> &CAMetalLayer {
+        &self.layer
+    }
+
+    /// Clears the next image to `rgba` and presents it. With `read`, also
+    /// gives its pixels (BGRA, 8 bits each, row by row).
+    pub fn present_clear(&self, rgba: [f64; 4], read: bool) -> Result<Option<Vec<u8>>, String> {
+        let drawable = self.layer.nextDrawable().ok_or("no drawable")?;
+        let texture = drawable.texture();
+        let pass = MTLRenderPassDescriptor::new();
+        // SAFETY: attachment 0 always exists.
+        let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+        color.setTexture(Some(&texture));
+        color.setLoadAction(MTLLoadAction::Clear);
+        color.setStoreAction(MTLStoreAction::Store);
+        let [red, green, blue, alpha] = rgba;
+        color.setClearColor(MTLClearColor {
+            red,
+            green,
+            blue,
+            alpha,
+        });
+        let commands = self.queue.commandBuffer().ok_or("no command buffer")?;
+        commands
+            .renderCommandEncoderWithDescriptor(&pass)
+            .ok_or("no render encoder")?
+            .endEncoding();
+        let (w, h) = self.size;
+        let readback = if read {
+            let device = self.layer.device().ok_or("no device")?;
+            let buffer = device
+                .newBufferWithLength_options(w * h * 4, MTLResourceOptions::StorageModeShared)
+                .ok_or("no buffer")?;
+            let blit = commands.blitCommandEncoder().ok_or("no blit encoder")?;
+            // SAFETY: the whole texture, into a buffer of its size.
+            unsafe {
+                blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                    &texture,
+                    0,
+                    0,
+                    MTLOrigin { x: 0, y: 0, z: 0 },
+                    MTLSize { width: w, height: h, depth: 1 },
+                    &buffer,
+                    0,
+                    w * 4,
+                    w * h * 4,
+                );
+            }
+            blit.endEncoding();
+            Some(buffer)
+        } else {
+            None
+        };
+        commands.presentDrawable(ProtocolObject::from_ref(&*drawable));
+        commands.commit();
+        commands.waitUntilCompleted();
+        if let Some(e) = commands.error() {
+            return Err(format!("presenting: {}", e.localizedDescription()));
+        }
+        Ok(readback.map(|b| {
+            // SAFETY: a shared buffer of w * h * 4 bytes, the GPU done with it.
+            unsafe { std::slice::from_raw_parts(b.contents().as_ptr().cast::<u8>(), w * h * 4) }
+                .to_vec()
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +325,28 @@ mod tests {
         let out = run_kernel(&device, source, "twice", &input).unwrap();
         assert_eq!(out, input.iter().map(|v| v * 2 + 1).collect::<Vec<_>>());
         assert!(run_kernel(&device, "not metal", "twice", &input).is_err());
+    }
+
+    #[test]
+    fn a_surface_presents_images_of_its_size_and_colour() {
+        let Some(device) = device() else {
+            eprintln!("skipped: no Metal device");
+            return;
+        };
+        let surface = Surface::new(&device, 64, 32).expect("a surface");
+        for _ in 0..3 {
+            surface.present_clear([0.0, 0.0, 0.0, 1.0], false).unwrap();
+        }
+        let pixels = surface
+            .present_clear([1.0, 0.5, 0.0, 1.0], true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pixels.len(), 64 * 32 * 4);
+        // BGRA: blue 0, green half, red full, alpha full.
+        for p in pixels.chunks_exact(4) {
+            assert_eq!((p[0], p[2], p[3]), (0, 255, 255));
+            assert!((127..=128).contains(&p[1]), "{p:?}");
+        }
     }
 
     #[test]

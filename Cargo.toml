@@ -39,7 +39,9 @@ libc = "0.2.191"
 # Metal on macOS: the GPU back end there.
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
-objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "block2", "MTLDevice", "MTLBuffer", "MTLResource", "MTLLibrary", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLTypes", "MTLAllocation"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "block2", "MTLDevice", "MTLBuffer", "MTLResource", "MTLLibrary", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLTypes", "MTLAllocation", "MTLTexture", "MTLPixelFormat", "MTLRenderPass", "MTLRenderCommandEncoder", "MTLDrawable", "MTLBlitCommandEncoder"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-metal", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
 windows = "0.62.2"
 windows-core = "0.62.2"
 blake3 = "1.8.7"

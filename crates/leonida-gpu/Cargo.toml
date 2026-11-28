@@ -21,6 +21,8 @@ libc.workspace = true
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-metal.workspace = true
+objc2-quartz-core.workspace = true
+objc2-core-foundation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

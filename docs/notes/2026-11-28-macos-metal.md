@@ -49,3 +49,11 @@ anonymous mapping's words left them inverted where the CPU reads them, with no c
 process sees 4 KiB pages under Rosetta (`getconf PAGESIZE`: 4096 under `arch -x86_64`, 16384
 natively); buffers must start and end on them. Whether Metal takes a no-copy buffer that is 4 KiB
 but not 16 KiB aligned was not tried (the mapping in the test was 16 KiB aligned).
+
+## Presentation: a Metal layer
+
+`Surface` is a `CAMetalLayer` of the title's size (BGRA8, readable): `present_clear` clears its
+next image to a colour and presents it, and can read the pixels back through a blit into a shared
+buffer. Tested under Rosetta 2 without a window: four images presented, the last read back as the
+colour asked for. Not done: the window (an AppKit `NSWindow` whose view shows the layer, on the
+main thread while the title runs on its own), and presenting the title's own frames.
