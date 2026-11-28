@@ -115,6 +115,83 @@ fn holding(map: &mut BTreeMap<usize, Reservation>, at: usize) -> Option<(usize, 
     (at < base + r.size).then_some((base, r))
 }
 
+/// Reserves `size` bytes aligned to `align` (at least 64 KiB) inside
+/// `low..=high`, committed with `protect` when `commit`: what the console's
+/// `XMemVirtualAlloc` asks for. Recorded as any reservation is.
+pub(super) fn reserve_in(
+    size: usize,
+    align: usize,
+    low: usize,
+    high: usize,
+    protect: u32,
+    commit: bool,
+) -> Option<usize> {
+    let prot = host_protection(protect)?;
+    let align = align.max(GRANULARITY);
+    let len = size.next_multiple_of(PAGE);
+    let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE;
+    let mut hint = low.next_multiple_of(align);
+    // The host takes a free hint as given; try further on while it does not.
+    for _ in 0..64 {
+        if hint.checked_add(len)? > high {
+            return None;
+        }
+        let span = len + align;
+        // SAFETY: a hint only (no MAP_FIXED), so nothing mapped is replaced.
+        let got = unsafe { libc::mmap(hint as *mut _, span, libc::PROT_NONE, flags, -1, 0) };
+        if got == libc::MAP_FAILED {
+            return None;
+        }
+        let start = got as usize;
+        let at = start.next_multiple_of(align);
+        if at < low || at + len - 1 > high {
+            // SAFETY: the mapping just made.
+            unsafe { libc::munmap(got, span) };
+            hint = if start > hint {
+                hint + span
+            } else {
+                hint + align
+            };
+            continue;
+        }
+        // SAFETY: both trimmed pieces are parts of the mapping just made.
+        unsafe {
+            if at > start {
+                libc::munmap(got, at - start);
+            }
+            if start + span > at + len {
+                libc::munmap((at + len) as *mut _, start + span - at - len);
+            }
+            if commit && libc::mprotect(at as *mut _, len, prot) != 0 {
+                libc::munmap(at as *mut _, len);
+                return None;
+            }
+        }
+        let pages = vec![if commit { protect } else { 0 }; len / PAGE];
+        reservations().insert(
+            at,
+            Reservation {
+                size: len,
+                pages,
+                initial: protect,
+            },
+        );
+        return Some(at);
+    }
+    None
+}
+
+/// Records that `at..at+len`, inside one of our reservations, now has
+/// `protect` (0: reserved only), when something else mapped it there.
+pub(super) fn mark(at: usize, len: usize, protect: u32) {
+    let mut map = reservations();
+    if let Some((base, r)) = holding(&mut map, at) {
+        let first = (at - base) / PAGE;
+        let last = ((at + len - base) / PAGE).min(r.pages.len());
+        r.pages[first..last].fill(protect);
+    }
+}
+
 #[allow(non_snake_case)]
 pub extern "win64" fn VirtualAlloc(
     address: *mut c_void,
@@ -281,6 +358,13 @@ pub struct BasicInformation {
     state: u32,
     protect: u32,
     kind: u32,
+}
+
+impl BasicInformation {
+    /// Whether the region is committed memory.
+    pub(super) fn committed(&self) -> bool {
+        self.state == MEM_COMMIT
+    }
 }
 
 #[allow(non_snake_case)]

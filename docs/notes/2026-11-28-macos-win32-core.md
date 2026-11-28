@@ -70,3 +70,31 @@ host volume does; attributes beyond read-only are not kept; no I/O completion po
 module (paths kept inside their drive, a file created, written, read with and without overlap,
 found, moved and deleted, wildcards, full paths and the current directory): 159 passed, 5 ignored
 with the loader and GPU crates (`--target x86_64-apple-darwin --locked`).
+
+## Console memory (`xmem.dll`)
+
+`modules::win32::xmem` (macOS) serves `xmem.dll` with the contracts of `modules::xmem`:
+`XMemAlloc`/`XMemFree` through the title's `__XMemAllocationHooks__` (the runner passes the
+export's address) or the default allocator with the attributes' alignment; 32-bit allocations
+below 4 GiB; `XMemVirtualAlloc` with 2 MiB alignment and the address ranges of the flags (from
+4 GiB up to 40 bits by default, as decision 0001 keeps them); `XMemVirtualQuery`; physical pages
+as 64 KiB slices of host shared-memory objects (`shm_open`, unlinked at once), mapped with
+`mmap(MAP_SHARED | MAP_FIXED)` so that a page mapped at two addresses shows the same bytes, and
+unmapped back to no access; working set statistics and memory transfers.
+
+It is a separate implementation, not Windows' made portable: Windows' is tied to the GPU side
+(write-combined memory, write watches, remapped texture views, `map_alias`), which has no macOS
+back end, and it is the measured memory core of the Windows build, which cannot be run from a
+Mac. Merge the two once a Metal back end needs the same hooks. `shortcut:` "used" in the working
+set is the process's peak resident size.
+
+**Measured: memory below 4 GiB.** A 64-bit macOS executable reserves its first 4 GiB
+(`__PAGEZERO`), so no allocation can land there, and the title's 32-bit graphics memory failed.
+`apps/leonida` and `leonida-hle` now link with `-pagezero_size 0x10000` on macOS (their
+`build.rs`), as Wine does; under Rosetta 2 on macOS 26.6 a 32-bit allocation then lands below
+4 GiB.
+
+Three tests: alignment, 32-bit and 40-bit ranges, 2 MiB alignment and the query's flags; two
+physical pages mapped at two reservations, a byte written through one address read through the
+other, unmapped, freed pages still readable where mapped; the title's hooks taking over
+`XMemAlloc`. With the rest, `--target x86_64-apple-darwin --locked`: 167 passed, 5 ignored.

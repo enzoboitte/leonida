@@ -14,6 +14,7 @@ mod memory;
 mod sync;
 mod system;
 mod thread;
+pub mod xmem;
 
 pub use system::set_command_line;
 

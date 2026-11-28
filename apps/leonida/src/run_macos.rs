@@ -166,6 +166,9 @@ pub fn run(
     let (image, report) = MappedImage::load(&original, &with, policy)?;
     drop(original);
     leonida_hle::runtime::set_main_image(image.base());
+    // The title's own allocator, if its exe exports one (see `modules::xmem`).
+    let hooks = image.export("__XMemAllocationHooks__").unwrap_or(0);
+    leonida_hle::modules::win32::xmem::set_allocation_hooks(hooks);
     leonida_hle::runtime::set_image_path(image.base(), exe);
     println!(
         "mapped at      {:#x} (preferred {:#x})",
