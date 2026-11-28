@@ -52,9 +52,9 @@ fn folder() -> Option<String> {
     if storage.as_os_str().is_empty() {
         return None;
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     return super::files::mount(&storage).map(|letter| format!("{letter}:\\"));
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     None
 }
 
@@ -178,7 +178,6 @@ mod tests {
     use crate::modules::xgameruntime::method;
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "needs files.rs, not ported off Windows yet")]
     fn serves_a_drive_over_the_title_folder_and_its_quota() {
         type Size = extern "win64" fn(This, *mut usize) -> HRESULT;
         type Get = extern "win64" fn(This, usize, *mut u8, *mut usize) -> HRESULT;
@@ -205,8 +204,8 @@ mod tests {
         assert_eq!(get(this, 3, buffer.as_mut_ptr(), &mut used), E_FAIL);
         let drive = std::str::from_utf8(&buffer[..3]).unwrap();
         assert!(drive.ends_with(":\\"), "{drive}");
-        // Title file calls on it reach the folder (`files` is Windows-only so far).
-        #[cfg(windows)]
+        // Title file calls on it reach the folder.
+        #[cfg(any(windows, target_os = "macos"))]
         {
             let path = format!("{drive}save.dat\0");
             let mut attributes = [0u8; 36];

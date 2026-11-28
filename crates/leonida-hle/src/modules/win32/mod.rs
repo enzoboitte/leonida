@@ -6,7 +6,10 @@
 //!
 //! Every function keeps Windows' contract: its results, its last error
 //! (in the TEB, where title code may read it), its structure layouts.
+// As in `files.rs` on Windows: the exports take the title's pointers by contract.
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::too_many_arguments)]
 
+pub mod files;
 mod memory;
 mod sync;
 mod system;
@@ -57,6 +60,7 @@ const SEH: [&str; 10] = [
 ];
 
 pub fn module() -> HleModule {
+    use files::*;
     use memory::*;
     use sync::*;
     use system::*;
@@ -148,10 +152,44 @@ pub fn module() -> HleModule {
         hle_export!(FlsFree),
         hle_export!(FlsGetValue),
         hle_export!(FlsSetValue),
+        // files
         hle_export!(GetStdHandle),
         hle_export!(GetFileType),
+        hle_export!(CreateFileW),
+        hle_export!(CreateFileA),
+        hle_export!(CreateFile2),
+        hle_export!(ReadFile),
         hle_export!(WriteFile),
         hle_export!(WriteConsoleW),
+        hle_export!(GetOverlappedResult),
+        hle_export!(SetFilePointer),
+        hle_export!(SetFilePointerEx),
+        hle_export!(GetFileSize),
+        hle_export!(GetFileSizeEx),
+        hle_export!(GetFileInformationByHandle),
+        hle_export!(GetFileInformationByHandleEx),
+        hle_export!(FlushFileBuffers),
+        hle_export!(SetEndOfFile),
+        hle_export!(GetFileAttributesW),
+        hle_export!(GetFileAttributesA),
+        hle_export!(GetFileAttributesExW),
+        hle_export!(SetFileAttributesW),
+        hle_export!(CreateDirectoryW),
+        hle_export!(CreateDirectoryA),
+        hle_export!(RemoveDirectoryW),
+        hle_export!(DeleteFileW),
+        hle_export!(DeleteFileA),
+        hle_export!(MoveFileExW),
+        hle_export!(GetFullPathNameW),
+        hle_export!(GetCurrentDirectoryW),
+        hle_export!(SetCurrentDirectoryW),
+        hle_export!(GetTempPathW),
+        hle_export!(GetDiskFreeSpaceExW),
+        hle_export!(FindFirstFileW),
+        hle_export!(FindFirstFileExW),
+        hle_export!(FindNextFileW),
+        hle_export!(FindClose),
+        hle_export!(GetLogicalDrives),
         // system
         hle_export!(QueryPerformanceCounter),
         hle_export!(QueryPerformanceFrequency),

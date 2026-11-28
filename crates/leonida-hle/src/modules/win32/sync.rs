@@ -45,6 +45,17 @@ pub(super) enum Object {
         id: u32,
         ended: Option<u32>,
     },
+    /// An open file: its host descriptor, whether it was opened for
+    /// overlapped I/O, and the host path to delete when it is closed.
+    File {
+        fd: i32,
+        overlapped: bool,
+        delete: Option<std::path::PathBuf>,
+    },
+    /// A file search: what it has still to give.
+    Find {
+        found: std::collections::VecDeque<super::files::FindData>,
+    },
 }
 
 pub(super) struct Table {
@@ -103,6 +114,8 @@ impl Table {
                 ready
             }
             Object::Thread { ended, .. } => ended.is_some(),
+            Object::File { .. } => true,
+            Object::Find { .. } => false,
         };
         Some(ready)
     }
@@ -202,12 +215,17 @@ pub extern "win64" fn CloseHandle(handle: usize) -> i32 {
     if handle == CURRENT_PROCESS || handle == CURRENT_THREAD {
         return 1;
     }
-    if table().objects.remove(&handle).is_some() || super::thread::close_std(handle) {
-        1
-    } else {
-        set_last_error(ERROR_INVALID_HANDLE);
-        0
+    let removed = table().objects.remove(&handle);
+    match removed {
+        Some(Object::File { fd, delete, .. }) => super::files::closed(fd, delete),
+        Some(_) => {}
+        None if super::files::close_std(handle) => {}
+        None => {
+            set_last_error(ERROR_INVALID_HANDLE);
+            return 0;
+        }
     }
+    1
 }
 
 fn event(manual: bool, set: bool) -> usize {

@@ -47,6 +47,8 @@ pub mod xuser;
 // What Windows' own DLLs give a title, for hosts without them.
 #[cfg(target_os = "macos")]
 pub mod win32;
+#[cfg(target_os = "macos")]
+pub use win32::files;
 
 use crate::HleModule;
 

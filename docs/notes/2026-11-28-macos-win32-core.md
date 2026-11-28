@@ -49,3 +49,24 @@ the last error per thread in the TEB; conversions and their buffer-size conventi
 154 passed, 6 ignored. Clippy with `-D warnings` is clean for `x86_64-apple-darwin`,
 `aarch64-apple-darwin` and, from the Mac with `CARGO_FEATURE_PURE=1`, `x86_64-pc-windows-msvc`
 (`--all-features`). Not run on Windows; nothing of it is built there.
+
+## Files and paths
+
+`modules::win32::files` (and `modules::files` on macOS, the same names as Windows' module):
+virtual drives over host folders (`mount`, `mount_at`; `G:` makes `G:\` the current directory),
+title paths turned into host paths inside their drive's folder (`\\?\`, `/`, `.`, `..`, trailing
+dots and spaces as Windows treats them; `..` stops at the drive's root), and files as host
+descriptors behind handles: `CreateFileW/A`, `CreateFile2` (every disposition, delete on close,
+`ERROR_ALREADY_EXISTS` where Windows sets it), `ReadFile`/`WriteFile` (overlapped ones complete at
+once, at their offset, with their event set, as Windows allows), file pointers, sizes,
+`GetFileInformationByHandle(Ex)` (basic and standard), flush, end of file, attributes, folders,
+delete, move, `FindFirstFile(Ex)W`/`FindNextFileW` with Windows' wildcards (and `.` and `..`
+below a drive's root), full paths, the current directory, `GetTempPathW` (`T:\`), free space.
+
+`shortcut:`s: a path on no mounted drive fails (`C:\` does not exist here); names compare as the
+host volume does; attributes beyond read-only are not kept; no I/O completion ports.
+
+`storage.rs` now mounts its folder on macOS too, and its test runs there. Four tests of the files
+module (paths kept inside their drive, a file created, written, read with and without overlap,
+found, moved and deleted, wildcards, full paths and the current directory): 159 passed, 5 ignored
+with the loader and GPU crates (`--target x86_64-apple-darwin --locked`).
