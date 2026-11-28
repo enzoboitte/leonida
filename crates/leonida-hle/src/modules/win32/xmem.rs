@@ -276,11 +276,46 @@ struct Catalog {
     pages: BTreeMap<usize, Slice>,
 }
 
+/// The first page number given out; 0 stays unused.
+const FIRST_PAGE: usize = 0x10_0000;
+/// Numbers from here on do not survive the title's 21-bit `number >> 4`.
+const PAGE_LIMIT: usize = 1 << 25;
+
 static CATALOG: Mutex<Catalog> = Mutex::new(Catalog {
-    // Page numbers are opaque to titles; 0 stays unused.
-    next: 0x10_0000,
+    next: FIRST_PAGE,
     pages: BTreeMap::new(),
 });
+
+// After trustno1-coder/VIctory-NVIDIA 108a897, a port of
+// avatarmanz/VIctory-7900XTX#316: numbers only grew, so past about 124 GiB
+// allocated over a run one came back truncated to the title.
+impl Catalog {
+    /// The first of `n` numbers, [`FRAMES`] apart, for new pages: after the
+    /// last given while they fit the title's 21 bits, then the lowest run of
+    /// `n` freed ones. `None` if there is no such run.
+    fn take(&mut self, n: usize) -> Option<usize> {
+        let len = n.checked_mul(FRAMES)?;
+        if let Some(end) = self.next.checked_add(len).filter(|&end| end <= PAGE_LIMIT) {
+            let first = self.next;
+            self.next = end;
+            return Some(first);
+        }
+        free_run(self.pages.keys().copied(), len)
+    }
+}
+
+/// The lowest start from [`FIRST_PAGE`] where `len` numbers (a multiple of
+/// [`FRAMES`]) up to [`PAGE_LIMIT`] are all outside `used` (in order).
+fn free_run(used: impl IntoIterator<Item = usize>, len: usize) -> Option<usize> {
+    let mut start = FIRST_PAGE;
+    for at in used.into_iter().chain([PAGE_LIMIT]) {
+        if at.checked_sub(start).is_some_and(|gap| gap >= len) {
+            return Some(start);
+        }
+        start = start.max(at.checked_add(FRAMES)?);
+    }
+    None
+}
 
 fn catalog() -> MutexGuard<'static, Catalog> {
     CATALOG.lock().unwrap_or_else(|e| e.into_inner())
@@ -306,8 +341,15 @@ pub extern "win64" fn XMemAllocatePhysicalPages(
     };
     let section = Arc::new(section);
     let mut catalog = catalog();
-    let first = catalog.next;
-    catalog.next += n * FRAMES;
+    let Some(first) = catalog.take(n) else {
+        tracing::warn!(
+            n,
+            "XMemAllocatePhysicalPages: no page numbers the title can keep"
+        );
+        // SAFETY: checked non-null.
+        unsafe { count.write(0) };
+        return 0;
+    };
     for index in 0..n {
         let number = first + index * FRAMES;
         catalog.pages.insert(
@@ -589,6 +631,27 @@ mod tests {
         assert_eq!(XMemFreePhysicalPages(2, pages.as_ptr()), 1);
         // SAFETY: still mapped at `a`: freed pages stay readable there.
         assert_eq!(unsafe { *(a as *const u8).add(PAGE + 7) }, 0x5A);
+    }
+
+    #[test]
+    fn page_numbers_freed_are_given_again_past_the_title_s_21_bits() {
+        let mut table = Catalog {
+            next: PAGE_LIMIT - 2 * FRAMES,
+            pages: BTreeMap::new(),
+        };
+        assert_eq!(
+            table.take(2),
+            Some(PAGE_LIMIT - 2 * FRAMES),
+            "the last that fit"
+        );
+        assert_eq!(table.take(3), Some(FIRST_PAGE), "then the lowest free run");
+        assert_eq!(table.take(usize::MAX), None);
+        let f = |k: usize| FIRST_PAGE + k * FRAMES;
+        assert_eq!(free_run([f(0), f(1), f(3)], FRAMES), Some(f(2)));
+        assert_eq!(free_run([f(0), f(1), f(3)], 2 * FRAMES), Some(f(4)));
+        assert_eq!(free_run([f(0)], PAGE_LIMIT - FIRST_PAGE), None);
+        let p = free_run([PAGE_LIMIT - FRAMES], FRAMES).unwrap();
+        assert_eq!((p >> 4 & 0x1f_ffff) << 4, p, "kept whole in 21 bits");
     }
 
     #[test]
