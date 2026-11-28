@@ -298,3 +298,34 @@ pub extern "system" fn probe_seh_seen() -> u64 {
 pub extern "system" fn probe_fault_read(address: u64) -> u64 {
     unsafe { probe_read(address) }
 }
+
+/// Console-only instructions (Zen 2 has them, Rosetta's CPU does not):
+/// `clzero` on the 64-byte line at `line`, a `monitorx`/`mwaitx` pair, then
+/// `rdpru` of MPERF, whose value it returns.
+#[unsafe(no_mangle)]
+pub extern "system" fn probe_console(line: *mut u8) -> u64 {
+    let (low, high): (u32, u32);
+    unsafe {
+        core::arch::asm!(
+            ".byte 0x0f, 0x01, 0xfc", // clzero [rax]
+            in("rax") line,
+            options(nostack),
+        );
+        core::arch::asm!(
+            ".byte 0x0f, 0x01, 0xfa", // monitorx [rax], ecx, edx
+            ".byte 0x0f, 0x01, 0xfb", // mwaitx eax, ecx (no timer)
+            inout("rax") line => _,
+            inout("ecx") 0 => _,
+            in("edx") 0,
+            options(nostack),
+        );
+        core::arch::asm!(
+            ".byte 0x0f, 0x01, 0xfd", // rdpru ecx=0: MPERF in edx:eax
+            in("ecx") 0,
+            out("eax") low,
+            out("edx") high,
+            options(nostack),
+        );
+    }
+    (high as u64) << 32 | low as u64
+}

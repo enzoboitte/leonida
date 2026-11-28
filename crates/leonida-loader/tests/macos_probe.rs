@@ -310,3 +310,15 @@ fn an_exe_runs_with_its_static_tls_in_slot_0() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn console_only_instructions_are_emulated() {
+    #[repr(align(64))]
+    struct Lines([u8; 128]);
+    let mut lines = Lines([0xFF; 128]);
+    let console: extern "win64" fn(*mut u8) -> u64 = export("probe_console");
+    let counter = console(lines.0.as_mut_ptr());
+    assert!(lines.0[..64].iter().all(|&b| b == 0), "clzero zeroed its line");
+    assert!(lines.0[64..].iter().all(|&b| b == 0xFF), "and only that line");
+    assert_ne!(counter, 0, "rdpru read a counter");
+}

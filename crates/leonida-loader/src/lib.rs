@@ -21,7 +21,7 @@
 //!    point on a thread with the stack size the image asks for; from then
 //!    on, pass every thread start and end on to the attached images.
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", target_arch = "x86_64")))]
 mod console_insn;
 #[cfg(windows)]
 mod crash;

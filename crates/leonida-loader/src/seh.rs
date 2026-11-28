@@ -207,6 +207,16 @@ fn step(
 /// Dispatches an exception raised with `ctx`, and resumes where a handler
 /// says; never returns.
 fn dispatch(record: &mut ExceptionRecord, ctx: &mut Context) -> ! {
+    // The console's CPU has instructions Rosetta's lacks; on Windows the
+    // crash reporter's vectored handler asks the same first.
+    if record.code == STATUS_ILLEGAL_INSTRUCTION {
+        // SAFETY: the faulting thread's context, laid out as Windows' CONTEXT.
+        let as_windows = unsafe { &mut *(ctx as *mut Context).cast() };
+        // SAFETY: the exception being dispatched.
+        if unsafe { crate::console_insn::emulate(as_windows) } == EXCEPTION_CONTINUE_EXECUTION {
+            restore(ctx);
+        }
+    }
     DISPATCHES.with_borrow_mut(|d| d.push(ctx as *const Context));
     let handlers = VECTORED.lock().unwrap_or_else(|e| e.into_inner()).clone();
     for (_, handler) in handlers {
