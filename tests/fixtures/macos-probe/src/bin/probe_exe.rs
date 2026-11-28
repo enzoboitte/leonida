@@ -1,6 +1,7 @@
 //! A stand-in title executable: its entry point returns 40 plus its static
 //! TLS variable, read as an exe's code reads it, from slot 0 of the TLS
-//! array without looking at `_tls_index`.
+//! array without looking at `_tls_index`, plus 100 when its import from the
+//! title DLL beside it (`macos_probe.dll`) is bound to that DLL.
 #![no_std]
 #![no_main]
 
@@ -42,13 +43,21 @@ pub static _tls_used: TlsDirectory = TlsDirectory {
     characteristics: 0,
 };
 
+#[link(name = "macos_probe", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn probe_relocated() -> usize;
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn probe_exe_main(_peb: *mut u8) -> u32 {
     unsafe {
         let array: *const *const u8;
         core::arch::asm!("mov {}, gs:[0x58]", out(reg) array, options(nostack, readonly));
         let offset = (&raw const TLS_TWO as usize) - (&raw const TLS_START as usize);
-        40 + *((*array).add(offset) as *const u32)
+        let tls = *((*array).add(offset) as *const u32);
+        // 13 from the DLL; an unimplemented-import stub answers 0.
+        let dll = if probe_relocated() == 13 { 100 } else { 0 };
+        40 + tls + dll
     }
 }
 

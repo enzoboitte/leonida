@@ -7,8 +7,66 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
+use leonida_shader::emit;
+#[cfg(windows)]
 use leonida_shader::emit::host::{self, Host};
-use leonida_shader::emit::{self, validator::Validator};
+#[cfg(windows)]
+use leonida_shader::emit::validator::Validator;
+#[cfg(not(windows))]
+use host::{Host, Validator};
+
+/// Off Windows there is no DXIL validator (`dxil.dll`) and no host D3D12
+/// device: asking for either says so, and nothing else can be reached.
+#[cfg(not(windows))]
+mod host {
+    use leonida_shader::emit::HostShader;
+
+    const NONE: &str = "needs Windows: there is no D3D12 device or DXIL validator on this host";
+
+    pub enum Host {}
+
+    impl Host {
+        pub fn new(_: bool) -> Result<Self, String> {
+            Err(NONE.into())
+        }
+
+        pub fn pipeline(&self, _: &HostShader, _: &HostShader) -> Result<(), String> {
+            match *self {}
+        }
+
+        pub fn mesh_pipeline(&self, _: &HostShader, _: &HostShader) -> Result<(), String> {
+            match *self {}
+        }
+
+        pub fn compute_pipeline(&self, _: &HostShader) -> Result<(), String> {
+            match *self {}
+        }
+    }
+
+    pub fn stub_ps() -> HostShader {
+        unreachable!("{NONE}")
+    }
+
+    pub fn stub_vs(_: &HostShader) -> Result<HostShader, String> {
+        Err(NONE.into())
+    }
+
+    pub enum Validator {}
+
+    impl Validator {
+        pub fn default_path() -> Option<std::path::PathBuf> {
+            None
+        }
+
+        pub fn load(_: Option<&std::path::Path>) -> Result<Self, String> {
+            Err(NONE.into())
+        }
+
+        pub fn validate(&mut self, _: &mut [u8]) -> Result<(), String> {
+            match *self {}
+        }
+    }
+}
 use leonida_shader::structure::{self, Atom, LaneExit};
 use leonida_shader::{
     Container, FourCC, HwStage, NativeProgram, RootType, ShaderError, ir, native_programs,
